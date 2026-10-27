@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "azure_scanner"
+version = "0.1.0"
+description = "Azure Document Intelligence Note Scanner"
+requires-python = ">=3.8"
+dependencies = [
+    "azure-ai-documentintelligence>=1.0.0",
+    "azure-core>=1.30.0",
+    "python-dotenv>=1.0.0"
+]
