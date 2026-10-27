@@ -3,44 +3,46 @@ from __future__ import annotations
 import os
 
 from azure.ai.documentintelligence import DocumentIntelligenceClient
-from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
+from azure.ai.documentintelligence.models import (
+    AnalyzeDocumentRequest,
+    DocumentContentFormat,
+)
 from azure.core.credentials import AzureKeyCredential
+
+from src.azure_scanner.preprocessing import preprocess_image
 
 
 class DocumentScannerService:
-    """Handles communication with the Azure Document Intelligence API."""
+    """Handles communication and image preprocessing for the Azure Document Intelligence API."""
 
     def __init__(
-        self, endpoint: str, key: str, model_id: str = "prebuilt-read"
+        self, endpoint: str, key: str, model_id: str = "prebuilt-layout"
     ) -> None:
         self.client = DocumentIntelligenceClient(
             endpoint=endpoint, credential=AzureKeyCredential(key)
         )
         self.model_id = model_id
 
-    def analyze_document(self, file_path: str):
+    def analyze_document_to_markdown(self, file_path: str) -> str:
         """
-        Reads a local file and sends it to Azure for analysis using the configured model.
-
-        Args:
-            file_path (str): The path to the local file to be analyzed.
-
-        Raises:
-            FileNotFoundError: If the specified file does not exist.
-
-        Returns:
-            The result of the analysis from Azure.
+        Preprocesses a local document, sends it to Azure, and returns the extracted text in Markdown format.
         """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found at '{file_path}'.")
 
-        with open(file_path, "rb") as f:
-            file_bytes = f.read()
+        print(
+            f"Preprocessing '{file_path}' (deskewing, noise reduction, contrast enhancement)..."
+        )
+        file_bytes = preprocess_image(file_path)
 
-        print(f"Analyzing '{file_path}' with model '{self.model_id}'...")
-
+        print(f"Analyzing document with model '{self.model_id}' (Markdown output)...")
         poller = self.client.begin_analyze_document(
             model_id=self.model_id,
             body=AnalyzeDocumentRequest(bytes_source=file_bytes),
+            output_content_format=DocumentContentFormat.MARKDOWN,
         )
-        return poller.result()
+        result = poller.result()
+
+        if not result.content:
+            return ""
+        return result.content
