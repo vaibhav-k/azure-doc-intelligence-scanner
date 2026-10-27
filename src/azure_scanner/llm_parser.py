@@ -9,27 +9,26 @@ from openai import AzureOpenAI
 from src.azure_scanner.models import MedicalPrescription
 
 
-def parse_markdown_with_gpt(markdown_content: str) -> MedicalPrescription:
+def parse_markdown_with_gpt(
+    markdown_content: str, deployment_name: str
+) -> MedicalPrescription:
     """
-    Parses Azure Document Intelligence Markdown output using Azure OpenAI GPT-4o
+    Parses Azure Document Intelligence Markdown output using Azure OpenAI
     with Structured Outputs conforming to the MedicalPrescription Pydantic model.
-
-    Args:
-        markdown_content: The Markdown content extracted from Azure Document Intelligence.
-
-    Raises:
-        ValueError: If the Azure OpenAI endpoint is not set or if the model fails to parse the response.
-
-    Returns:
-        MedicalPrescription: The parsed medical prescription data.
     """
     endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
     api_key = os.environ.get("AZURE_OPENAI_API_KEY")
-    deployment_name = os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o")
     api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-01-preview")
 
     if not endpoint:
-        raise ValueError("AZURE_OPENAI_ENDPOINT must be set in environment variables.")
+        print(
+            "Error: AZURE_OPENAI_ENDPOINT must be set in environment variables.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if not deployment_name:
+        raise ValueError("A valid Azure OpenAI deployment name must be provided.")
 
     try:
         # Support API Key auth if provided, otherwise fallback to Azure AD credentials
@@ -65,6 +64,7 @@ def parse_markdown_with_gpt(markdown_content: str) -> MedicalPrescription:
                 {"role": "user", "content": markdown_content},
             ],
             response_format=MedicalPrescription,
+            temperature=1,
         )
 
         parsed_data = completion.choices[0].message.parsed

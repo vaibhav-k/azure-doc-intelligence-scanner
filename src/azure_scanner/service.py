@@ -23,9 +23,9 @@ class DocumentScannerService:
         )
         self.model_id = model_id
 
-    def analyze_document_to_markdown(self, file_path: str) -> str:
+    def analyze_document(self, file_path: str):
         """
-        Preprocesses a local document, sends it to Azure, and returns the extracted text in Markdown format.
+        Preprocesses a local document, sends it to Azure, and returns the raw analysis result object.
         """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found at '{file_path}'.")
@@ -41,8 +41,4 @@ class DocumentScannerService:
             body=AnalyzeDocumentRequest(bytes_source=file_bytes),
             output_content_format=DocumentContentFormat.MARKDOWN,
         )
-        result = poller.result()
-
-        if not result.content:
-            return ""
-        return result.content
+        return poller.result()
