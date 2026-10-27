@@ -1,17 +1,22 @@
+from __future__ import annotations
+
 import sys
 
 from azure.core.exceptions import AzureError
-from config import get_azure_config
-from service import DocumentScannerService
-from utils import print_extracted_text
+
+from src.azure_scanner.config import get_azure_config
+from src.azure_scanner.service import DocumentScannerService
+from src.azure_scanner.utils import print_extracted_text
 
 
-def main():
-    endpoint, key = get_azure_config()
-    path_to_note = "inputs/[clean] handwritten doctor's notes.jpeg"
+def main() -> None:
+    endpoint, key, model_id = get_azure_config()
+    path_to_note = "./inputs/[clean] handwritten doctor's notes.jpeg"
 
     try:
-        scanner_service = DocumentScannerService(endpoint=endpoint, key=key)
+        scanner_service = DocumentScannerService(
+            endpoint=endpoint, key=key, model_id=model_id
+        )
         result = scanner_service.analyze_document(path_to_note)
         print_extracted_text(result)
 
