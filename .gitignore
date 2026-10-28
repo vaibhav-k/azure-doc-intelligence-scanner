@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Local configuration & environment variables
+.env
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# ruff cache
+.ruff_cache/
