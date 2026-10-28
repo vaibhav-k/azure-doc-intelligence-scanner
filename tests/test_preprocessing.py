@@ -28,7 +28,14 @@ from azure_scanner.preprocessing import (
     rotate_expand,
     sniff_format,
 )
-from tests.conftest import encode, rotate_same_canvas, synthetic_page
+from tests.conftest import (
+    encode,
+    locked_pdf,
+    make_pdf,
+    make_tiff,
+    rotate_same_canvas,
+    synthetic_page,
+)
 
 
 def _gray(img: np.ndarray) -> np.ndarray:
@@ -109,10 +116,59 @@ def test_format_sniffing(header: bytes, fmt: InputFormat) -> None:
 
 
 def test_pdf_is_passed_through_untouched_even_in_enhanced_mode() -> None:
-    pdf = b"%PDF-1.7\n%synthetic\n"
+    pdf = make_pdf(1)
     out = preprocess_bytes(pdf, PreprocessMode.ENHANCED)
     assert out.payload == pdf
     assert out.warnings == ("enhancement_skipped_multipage_format",)
+
+
+# ---------- page counting ----------
+
+
+@pytest.mark.parametrize("pages", [1, 3])
+def test_pdf_pages_are_counted(pages: int) -> None:
+    assert preprocess_bytes(make_pdf(pages)).page_count == pages
+
+
+@pytest.mark.parametrize("pages", [1, 4])
+def test_tiff_pages_are_counted(pages: int, tmp_path: Path) -> None:
+    assert preprocess_bytes(make_tiff(pages, tmp_path)).page_count == pages
+
+
+def test_single_image_is_one_page() -> None:
+    assert preprocess_bytes(encode(synthetic_page(), ".png")).page_count == 1
+
+
+@pytest.mark.parametrize(
+    "data, code",
+    [
+        (b"%PDF-1.7\n%not really a pdf\n", "corrupt_or_undecodable_pdf"),
+        (
+            b"II*\x00\xff\xff\xff\x7f",
+            "corrupt_or_undecodable_image",
+        ),  # IFD offset past the end
+        (
+            b"II*\x00\x08\x00\x00\x00\x00\x00\x08\x00\x00\x00",
+            "corrupt_or_undecodable_image",
+        ),  # cycle
+    ],
+)
+def test_unparseable_multipage_inputs_are_rejected(data: bytes, code: str) -> None:
+    with pytest.raises(ImageValidationError, match=code):
+        preprocess_bytes(data)
+
+
+def test_password_protected_pdf_is_rejected() -> None:
+    with pytest.raises(ImageValidationError, match="pdf_password_protected"):
+        preprocess_bytes(locked_pdf())
+
+
+def test_page_limit_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
+    import azure_scanner.preprocessing as prep
+
+    monkeypatch.setattr(prep, "MAX_PAGES", 2)
+    with pytest.raises(ImageValidationError, match="too_many_pages"):
+        preprocess_bytes(make_pdf(3))
 
 
 # ---------- default (minimal) mode preserves the original ----------
