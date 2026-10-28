@@ -59,7 +59,11 @@ def _completion(content: str | None, finish: str = "stop", refusal: str | None =
             {
                 "index": 0,
                 "finish_reason": finish,
-                "message": {"role": "assistant", "content": content, "refusal": refusal},
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                    "refusal": refusal,
+                },
             }
         ],
         "usage": {"prompt_tokens": 120, "completion_tokens": 80, "total_tokens": 200},
@@ -107,7 +111,11 @@ def test_sdk_success_parses_schema_and_reports_usage(no_sleep: list[float]) -> N
     rec = Recorder([ok()])
     out = _sdk_extractor(rec).extract("Rx text", correlation_id="c")
     assert out.extraction == empty_extraction()
-    assert (out.prompt_tokens, out.completion_tokens, out.model) == (120, 80, "test-model-2026-01-01")
+    assert (out.prompt_tokens, out.completion_tokens, out.model) == (
+        120,
+        80,
+        "test-model-2026-01-01",
+    )
     body = json.loads(rec.requests[0].content)
     assert body["model"] == "test-deployment"
     assert body["response_format"]["type"] == "json_schema"
@@ -122,7 +130,9 @@ def test_sdk_sends_temperature_only_when_configured(no_sleep: list[float]) -> No
     assert json.loads(rec.requests[0].content)["temperature"] == 0.0
 
 
-def test_sdk_retries_429_honouring_retry_after_then_succeeds(no_sleep: list[float]) -> None:
+def test_sdk_retries_429_honouring_retry_after_then_succeeds(
+    no_sleep: list[float],
+) -> None:
     rec = Recorder([status(429, {"retry-after": "3"}), ok()])
     _sdk_extractor(rec).extract("Rx", correlation_id="c")
     assert len(rec.requests) == 2
@@ -147,7 +157,11 @@ def test_sdk_5xx_retried_then_mapped(no_sleep: list[float], code: int, err: type
 
 @pytest.mark.parametrize(
     "code, err, detail",
-    [(401, LlmAuthError, "401"), (403, LlmAuthError, "403"), (404, LlmConfigurationError, "404")],
+    [
+        (401, LlmAuthError, "401"),
+        (403, LlmAuthError, "403"),
+        (404, LlmConfigurationError, "404"),
+    ],
 )
 def test_sdk_non_retryable_errors_are_not_retried(
     no_sleep: list[float], code: int, err: type, detail: str
@@ -159,7 +173,9 @@ def test_sdk_non_retryable_errors_are_not_retried(
     assert not exc.value.retryable and exc.value.detail == detail
 
 
-def test_sdk_unsupported_parameter_is_actionable_and_not_retried(no_sleep: list[float]) -> None:
+def test_sdk_unsupported_parameter_is_actionable_and_not_retried(
+    no_sleep: list[float],
+) -> None:
     body = {
         "error": {
             "message": f"echo {PHI_SENTINELS[2]}",
@@ -261,13 +277,21 @@ def test_v1_client_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     assert client.max_retries == 1 and client.timeout == 60.0
 
 
-def test_v1_client_with_entra_id_token_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_v1_client_with_entra_id_token_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = build_openai_client(_settings(monkeypatch))  # no key -> DefaultAzureCredential provider
     assert type(client) is openai.OpenAI  # constructed; no token is fetched until a request is made
 
 
-def test_legacy_azure_client_when_api_version_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    s = _settings(monkeypatch, AZURE_OPENAI_API_KEY="k", AZURE_OPENAI_API_VERSION="2024-10-01-preview")
+def test_legacy_azure_client_when_api_version_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    s = _settings(
+        monkeypatch,
+        AZURE_OPENAI_API_KEY="k",
+        AZURE_OPENAI_API_VERSION="2024-10-01-preview",
+    )
     rec = Recorder([ok()])
     client = build_openai_client(s)
     assert isinstance(client, openai.AzureOpenAI)

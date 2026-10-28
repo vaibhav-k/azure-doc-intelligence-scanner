@@ -131,7 +131,11 @@ class ResultSink(Protocol):
     capabilities: Mapping[EmrCapability, CapabilityStatus]
 
     def deliver(
-        self, ref: SourceDocumentRef, result: ProcessingResult, record: ReviewRecord, idempotency_key: str
+        self,
+        ref: SourceDocumentRef,
+        result: ProcessingResult,
+        record: ReviewRecord,
+        idempotency_key: str,
     ) -> DeliveryReceipt: ...
 
 
@@ -143,7 +147,11 @@ class DisabledResultSink:
     }
 
     def deliver(
-        self, ref: SourceDocumentRef, result: ProcessingResult, record: ReviewRecord, idempotency_key: str
+        self,
+        ref: SourceDocumentRef,
+        result: ProcessingResult,
+        record: ReviewRecord,
+        idempotency_key: str,
     ) -> DeliveryReceipt:
         raise WriteBackNotAuthorizedError("write_back_not_verified")
 

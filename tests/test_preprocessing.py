@@ -44,7 +44,10 @@ def _decode(b: bytes) -> np.ndarray:
     [
         (b"", "empty_input"),
         (b"hello, not an image", "unsupported_format"),
-        (b"\xff\xd8\xff" + b"\x00" * 64, "corrupt_or_undecodable_image"),  # JPEG magic, garbage body
+        (
+            b"\xff\xd8\xff" + b"\x00" * 64,
+            "corrupt_or_undecodable_image",
+        ),  # JPEG magic, garbage body
         (b"\x89PNG\r\n\x1a\n" + b"\x00" * 64, "corrupt_or_undecodable_image"),
         (b"GIF89a" + b"\x00" * 64, "unsupported_format"),
     ],

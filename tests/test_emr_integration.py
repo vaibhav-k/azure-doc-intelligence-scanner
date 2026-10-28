@@ -9,7 +9,10 @@ from datetime import datetime, timezone
 import openai
 import pytest
 
-from azure_scanner.integrations.accuro import ACCURO_CAPABILITIES, VENDOR_VERIFICATION_REQUIRED
+from azure_scanner.integrations.accuro import (
+    ACCURO_CAPABILITIES,
+    VENDOR_VERIFICATION_REQUIRED,
+)
 from azure_scanner.integrations.emr import (
     CapabilityStatus,
     DeliveryReceipt,
@@ -29,7 +32,12 @@ from azure_scanner.integrations.emr import (
 )
 from azure_scanner.models import HumanConfirmation
 from azure_scanner.pipeline import ProcessingStatus
-from azure_scanner.review import ReviewPolicy, ReviewStatus, approve, required_confirmation_paths
+from azure_scanner.review import (
+    ReviewPolicy,
+    ReviewStatus,
+    approve,
+    required_confirmation_paths,
+)
 from tests.conftest import PHI_SENTINELS
 from tests.test_pipeline import _pipeline
 
@@ -79,7 +87,10 @@ def _approved(outcome):  # type: ignore[no-untyped-def]
         for p in required_confirmation_paths(record, ReviewPolicy())
     ]
     return approve(
-        record, reviewer_id="dr-1", confirmations=confirmations, acknowledged_reasons=record.reasons
+        record,
+        reviewer_id="dr-1",
+        confirmations=confirmations,
+        acknowledged_reasons=record.reasons,
     )
 
 
@@ -187,7 +198,9 @@ def test_verified_sink_and_approval_deliver_once_idempotently(page_png: bytes) -
 def test_identifiers_never_logged(page_png: bytes, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.DEBUG)
     process_emr_document(
-        FakeSource(page_png, error=EmrNotFoundError("emr_document_not_found")), REF, _pipeline()[0]
+        FakeSource(page_png, error=EmrNotFoundError("emr_document_not_found")),
+        REF,
+        _pipeline()[0],
     )
     process_emr_document(FakeSource(page_png), REF, _pipeline()[0])
     logged = " ".join(r.getMessage() + repr(getattr(r, "safe_fields", "")) for r in caplog.records)

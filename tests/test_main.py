@@ -73,11 +73,23 @@ def test_cli_exit_code_1_when_any_input_fails(
     missing = tmp_path / "missing.png"
     pipe, _ = _pipeline()
     code = main(
-        ["process", str(good), str(bad), str(missing), "--out-dir", str(tmp_path / "o")], pipeline=pipe
+        [
+            "process",
+            str(good),
+            str(bad),
+            str(missing),
+            "--out-dir",
+            str(tmp_path / "o"),
+        ],
+        pipeline=pipe,
     )
     lines = _lines(capsys.readouterr().out)
     assert code == 1
-    assert [ln["processing_status"] for ln in lines] == ["completed", "failed", "failed"]
+    assert [ln["processing_status"] for ln in lines] == [
+        "completed",
+        "failed",
+        "failed",
+    ]
     assert lines[1]["error_code"] == "unsupported_format" and lines[2]["error_code"] == "input_unreadable"
 
 

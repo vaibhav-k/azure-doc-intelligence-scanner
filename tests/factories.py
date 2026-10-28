@@ -44,4 +44,10 @@ CLEAN_TEXT = "Rx Drug-X 2 mg PO BID 7 days"
 
 
 def clean_med() -> MedicationExtraction:
-    return med(drug_name="Drug-X", strength="2 mg", route="PO", frequency="BID", duration="7 days")
+    return med(
+        drug_name="Drug-X",
+        strength="2 mg",
+        route="PO",
+        frequency="BID",
+        duration="7 days",
+    )

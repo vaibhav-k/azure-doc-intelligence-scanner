@@ -79,10 +79,21 @@ def test_invalid_threshold_rejected(bad: object) -> None:
 
 
 def test_mixed_confidence_pages() -> None:
-    p1 = _page([make_word("Drug-X", 0.99, 0), make_word("0.5", 0.41, 7), make_word("mg", None, 11)], n=1)
+    p1 = _page(
+        [
+            make_word("Drug-X", 0.99, 0),
+            make_word("0.5", 0.41, 7),
+            make_word("mg", None, 11),
+        ],
+        n=1,
+    )
     p2 = _page(lines=[NS(content="sig")], n=2)
     report = evaluate_ocr_confidence(_result(p1, p2))
-    assert report.flag_counts() == {"low_confidence": 1, "missing_confidence": 1, "unscored_page": 1}
+    assert report.flag_counts() == {
+        "low_confidence": 1,
+        "missing_confidence": 1,
+        "unscored_page": 1,
+    }
     assert report.scored_word_count == 2
     assert report.min_confidence == 0.41
     assert report.page_count == 2
@@ -94,7 +105,13 @@ def test_words_and_lines_on_same_page_uses_word_scores() -> None:
 
 
 def test_span_lookup_for_field_provenance() -> None:
-    p = _page([make_word("Drug-X", 0.99, 0), make_word("0.5", 0.41, 7), make_word("mg", 0.95, 11)])
+    p = _page(
+        [
+            make_word("Drug-X", 0.99, 0),
+            make_word("0.5", 0.41, 7),
+            make_word("mg", 0.95, 11),
+        ]
+    )
     report = evaluate_ocr_confidence(_result(p))
     assert [w.confidence for w in words_in_span(report, 7, 6)] == [0.41, 0.95]
 

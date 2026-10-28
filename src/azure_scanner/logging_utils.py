@@ -61,7 +61,10 @@ ALLOWED_FIELDS = frozenset(
     }
 )
 
-_RESERVED = set(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {"message", "asctime"}
+_RESERVED = set(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {
+    "message",
+    "asctime",
+}
 
 
 def new_correlation_id() -> str:
@@ -83,7 +86,7 @@ class SafeJsonFormatter(logging.Formatter):
             "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "event": record.msg if isinstance(record.msg, str) else type(record.msg).__name__,
+            "event": (record.msg if isinstance(record.msg, str) else type(record.msg).__name__),
         }
         payload.update(getattr(record, "safe_fields", {}))
         if record.exc_info and record.exc_info[0] is not None:
@@ -122,5 +125,11 @@ def configure_logging(level: str = "INFO") -> None:
     root.handlers[:] = [handler]
     root.setLevel(level.upper())
     # Third-party HTTP loggers can emit URLs and headers at DEBUG; keep them quiet.
-    for noisy in ("azure", "azure.core.pipeline.policies.http_logging_policy", "httpx", "openai", "urllib3"):
+    for noisy in (
+        "azure",
+        "azure.core.pipeline.policies.http_logging_policy",
+        "httpx",
+        "openai",
+        "urllib3",
+    ):
         logging.getLogger(noisy).setLevel(logging.WARNING)

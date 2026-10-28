@@ -28,7 +28,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from azure_scanner import __version__
-from azure_scanner.confidence import OcrConfidenceReport, OcrFlag, evaluate_ocr_confidence
+from azure_scanner.confidence import (
+    OcrConfidenceReport,
+    OcrFlag,
+    evaluate_ocr_confidence,
+)
 from azure_scanner.errors import OcrError, PipelineError
 from azure_scanner.llm_parser import LlmExtractor, annotate_low_confidence
 from azure_scanner.logging_utils import log_event, new_correlation_id
@@ -145,7 +149,7 @@ class ProcessingResult(BaseModel):
             "error_code": self.error_code,
             "retryable": self.retryable,
             "page_count": self.ocr.page_count if self.ocr else None,
-            "medication_count": len(self.extraction.medications) if self.extraction else None,
+            "medication_count": (len(self.extraction.medications) if self.extraction else None),
             "timings_ms": self.timings_ms,
         }
 
@@ -158,7 +162,11 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-_SPAN_FLAGS = {OcrFlag.LOW_CONFIDENCE, OcrFlag.MISSING_CONFIDENCE, OcrFlag.INVALID_CONFIDENCE}
+_SPAN_FLAGS = {
+    OcrFlag.LOW_CONFIDENCE,
+    OcrFlag.MISSING_CONFIDENCE,
+    OcrFlag.INVALID_CONFIDENCE,
+}
 
 
 def _uncertain_spans(report: OcrConfidenceReport) -> list[tuple[int, int]]:
@@ -207,20 +215,26 @@ class DocumentPipeline:
             return out
 
         try:
-            prepared = timed("input_validation", lambda: self.scanner.prepare(data, correlation_id=cid))
+            prepared = timed(
+                "input_validation",
+                lambda: self.scanner.prepare(data, correlation_id=cid),
+            )
             state["input_format"] = prepared.input_format.value
             state["preprocessing"] = {
                 "mode": prepared.mode.value,
                 "transformations": list(prepared.transformations),
                 "warnings": list(prepared.warnings),
                 "deskew_reason": prepared.deskew.reason if prepared.deskew else None,
-                "deskew_angle": prepared.deskew.angle
-                if prepared.deskew and prepared.deskew.applied
-                else None,
+                "deskew_angle": (
+                    prepared.deskew.angle if prepared.deskew and prepared.deskew.applied else None
+                ),
             }
             done.append("preprocessing")  # preparation covers validation + preprocessing
 
-            result = timed("ocr", lambda: self.scanner.run_ocr(prepared.payload, correlation_id=cid))
+            result = timed(
+                "ocr",
+                lambda: self.scanner.run_ocr(prepared.payload, correlation_id=cid),
+            )
             content: str = getattr(result, "content", None) or ""
 
             report: OcrConfidenceReport = timed(
@@ -238,7 +252,11 @@ class DocumentPipeline:
             )
             state["ocr_review_items"] = tuple(
                 OcrReviewItemOut(
-                    page=i.page, flag=i.flag.value, confidence=i.confidence, text=i.content, polygon=i.polygon
+                    page=i.page,
+                    flag=i.flag.value,
+                    confidence=i.confidence,
+                    text=i.content,
+                    polygon=i.polygon,
                 )
                 for i in report.review_items
             )
@@ -249,7 +267,10 @@ class DocumentPipeline:
             extractor = self.extractor
             if extractor is not None:
                 annotated = annotate_low_confidence(content, _uncertain_spans(report))
-                outcome = timed("llm_extraction", lambda: extractor.extract(annotated, correlation_id=cid))
+                outcome = timed(
+                    "llm_extraction",
+                    lambda: extractor.extract(annotated, correlation_id=cid),
+                )
                 state["llm"] = LlmSummary(
                     enabled=True,
                     model=outcome.model,
@@ -285,7 +306,13 @@ class DocumentPipeline:
             )
         except PipelineError as exc:
             final = self._failed(
-                state, record, done, timings, getattr(exc, "stage", None) or stage, exc.code, exc.retryable
+                state,
+                record,
+                done,
+                timings,
+                getattr(exc, "stage", None) or stage,
+                exc.code,
+                exc.retryable,
             )
         except Exception as exc:  # noqa: BLE001 - boundary: unexpected bugs become a coded failure, never success
             log_event(

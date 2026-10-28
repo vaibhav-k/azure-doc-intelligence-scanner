@@ -31,7 +31,12 @@ T0 = datetime(2026, 10, 28, tzinfo=timezone.utc)
 def _route(extraction, text=CLEAN_TEXT, confidences=None, llm_enabled=True) -> ReviewRecord:  # type: ignore[no-untyped-def]
     ocr = evaluate_ocr_confidence(ocr_result_from_text(text, confidences))
     return route_for_review(
-        new_record("c1"), ocr=ocr, content=text, extraction=extraction, policy=POLICY, llm_enabled=llm_enabled
+        new_record("c1"),
+        ocr=ocr,
+        content=text,
+        extraction=extraction,
+        policy=POLICY,
+        llm_enabled=llm_enabled,
     )
 
 
@@ -55,12 +60,24 @@ def test_schema_valid_clean_extraction_still_needs_review() -> None:
 @pytest.mark.parametrize(
     "field_name, value, reason",
     [
-        ("drug_name", fld("Drug-X or Drug-Y", "ambiguous", alternatives=["Drug-X", "Drug-Y"]), "ambiguous"),
+        (
+            "drug_name",
+            fld("Drug-X or Drug-Y", "ambiguous", alternatives=["Drug-X", "Drug-Y"]),
+            "ambiguous",
+        ),
         ("strength", fld(None, "illegible"), "illegible"),
-        ("dose", fld("1 or 7 tab", "ambiguous", alternatives=["1 tab", "7 tab"]), "ambiguous"),
+        (
+            "dose",
+            fld("1 or 7 tab", "ambiguous", alternatives=["1 tab", "7 tab"]),
+            "ambiguous",
+        ),
         ("route", fld(None, "illegible"), "illegible"),
         ("frequency", fld("q?h", "illegible"), "illegible"),
-        ("duration", fld("7 or 14 d", "ambiguous", alternatives=["7 d", "14 d"]), "ambiguous"),
+        (
+            "duration",
+            fld("7 or 14 d", "ambiguous", alternatives=["7 d", "14 d"]),
+            "ambiguous",
+        ),
     ],
 )
 def test_uncertain_medication_elements_route_to_priority_review(field_name: str, value, reason: str) -> None:  # type: ignore[no-untyped-def]
@@ -114,7 +131,12 @@ def test_error_prone_decimal_notation_flagged(text: str) -> None:
 
 def test_contradictory_entries_for_same_drug_flagged() -> None:
     record = _route(
-        doc(medications=[clean_med(), clean_med().model_copy(update={"strength": fld("20 mg")})]),
+        doc(
+            medications=[
+                clean_med(),
+                clean_med().model_copy(update={"strength": fld("20 mg")}),
+            ]
+        ),
         text=CLEAN_TEXT + " Drug-X 20 mg",
     )
     assert "contradictory_medication_entries" in record.reasons
@@ -141,7 +163,8 @@ def test_uncertain_allergy_and_identity_flagged() -> None:
         (
             {
                 "extraction": doc(
-                    medications=[clean_med()], extraction_warnings=["text asked to ignore rules"]
+                    medications=[clean_med()],
+                    extraction_warnings=["text asked to ignore rules"],
                 )
             },
             "model_reported_warnings",
@@ -194,7 +217,11 @@ def test_assess_field_not_present_has_unknown_provenance() -> None:
 def test_approval_requires_confirmation_of_every_consequential_field() -> None:
     record = _route(doc(medications=[clean_med()]))
     required = required_confirmation_paths(record, POLICY)
-    assert {"medications[0].drug_name", "medications[0].strength", "medications[0].frequency"} <= required
+    assert {
+        "medications[0].drug_name",
+        "medications[0].strength",
+        "medications[0].frequency",
+    } <= required
     with pytest.raises(ReviewTransitionError, match="unconfirmed_fields"):
         approve(record, reviewer_id="dr-reviewer-01", confirmations=_confirm(record)[:-1])
     approved = approve(
@@ -212,7 +239,9 @@ def test_approval_requires_confirmation_of_every_consequential_field() -> None:
 def test_document_level_reasons_must_be_acknowledged() -> None:
     # Low-confidence OCR text that maps to no extracted field (e.g. an omitted medication line).
     record = _route(
-        doc(medications=[clean_med()]), text=CLEAN_TEXT + " Drug-Z 40 mg", confidences={"Drug-Z": 0.3}
+        doc(medications=[clean_med()]),
+        text=CLEAN_TEXT + " Drug-Z 40 mg",
+        confidences={"Drug-Z": 0.3},
     )
     assert "ocr_low_confidence" in record.reasons
     with pytest.raises(ReviewTransitionError, match="unacknowledged_reasons"):
@@ -263,10 +292,16 @@ def test_failed_cannot_transition_anywhere() -> None:
 
 def test_reject_requires_code_not_free_text() -> None:
     with pytest.raises(ReviewTransitionError, match="reason_code_must_be_a_code"):
-        reject(_route(doc()), reviewer_id="d", reason_code=f"patient {PHI_SENTINELS[0]} wrong chart")
+        reject(
+            _route(doc()),
+            reviewer_id="d",
+            reason_code=f"patient {PHI_SENTINELS[0]} wrong chart",
+        )
 
 
-def test_status_changes_are_recorded_and_logged_without_phi(caplog: pytest.LogCaptureFixture) -> None:
+def test_status_changes_are_recorded_and_logged_without_phi(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     caplog.set_level(logging.INFO)
     m = clean_med().model_copy(update={"drug_name": fld(PHI_SENTINELS[2])})
     record = _route(

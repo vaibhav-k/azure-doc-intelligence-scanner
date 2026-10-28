@@ -19,7 +19,12 @@ from pydantic import ValidationError
 
 from azure_scanner.llm_parser import LOW_CONF_OPEN, LlmExtractor
 from azure_scanner.models import ClinicalDocumentExtraction
-from azure_scanner.pipeline import STAGES, DocumentPipeline, ProcessingResult, ProcessingStatus
+from azure_scanner.pipeline import (
+    STAGES,
+    DocumentPipeline,
+    ProcessingResult,
+    ProcessingStatus,
+)
 from azure_scanner.review import ReviewStatus, new_record
 from azure_scanner.service import DocumentScannerService
 from tests.conftest import PHI_SENTINELS, ocr_result_from_text
@@ -55,7 +60,10 @@ def _pipeline(
     di_error: Exception | None = None,
     llm: bool = True,
 ) -> tuple[DocumentPipeline, MagicMock]:
-    di = _di_client(ocr_result if ocr_result is not None else ocr_result_from_text(CLEAN_TEXT), di_error)
+    di = _di_client(
+        ocr_result if ocr_result is not None else ocr_result_from_text(CLEAN_TEXT),
+        di_error,
+    )
     scanner = DocumentScannerService(di, "prebuilt-layout", timeout_seconds=5)
     extractor = (
         _extractor(recorder or Recorder([ok(doc(medications=[clean_med()]).model_dump_json())]))
@@ -93,10 +101,15 @@ def test_low_confidence_ocr_spans_reach_the_llm_marked(page_png: bytes) -> None:
     sent = json.loads(rec.requests[0].content)["messages"][1]["content"]
     assert f"{LOW_CONF_OPEN}2]]" in sent and f"{LOW_CONF_OPEN}BID]]" in sent
     assert result.review.priority is not None and result.review.priority.value == "priority"
-    assert {i.flag for i in result.ocr_review_items} == {"low_confidence", "missing_confidence"}
+    assert {i.flag for i in result.ocr_review_items} == {
+        "low_confidence",
+        "missing_confidence",
+    }
 
 
-def test_llm_disabled_completes_with_manual_transcription_required(page_png: bytes) -> None:
+def test_llm_disabled_completes_with_manual_transcription_required(
+    page_png: bytes,
+) -> None:
     pipe, _ = _pipeline(llm=False)
     result = pipe.process(page_png)
     assert result.processing_status is ProcessingStatus.COMPLETED
@@ -211,7 +224,9 @@ def _phi_ocr() -> Any:
 def _phi_extraction_json() -> str:
     m = clean_med().model_copy(update={"drug_name": fld(PHI_SENTINELS[2])})
     return doc(
-        patient_name=fld(PHI_SENTINELS[0]), patient_dob_or_age=fld(PHI_SENTINELS[1]), medications=[m]
+        patient_name=fld(PHI_SENTINELS[0]),
+        patient_dob_or_age=fld(PHI_SENTINELS[1]),
+        medications=[m],
     ).model_dump_json()
 
 

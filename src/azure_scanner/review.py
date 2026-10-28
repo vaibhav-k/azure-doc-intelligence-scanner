@@ -234,7 +234,11 @@ def new_record(correlation_id: str) -> ReviewRecord:
 
 def mark_failed(record: ReviewRecord, error_code: str) -> ReviewRecord:
     return _transition(
-        record, ReviewStatus.FAILED, actor_type="system", actor_id="pipeline", event_reasons=(error_code,)
+        record,
+        ReviewStatus.FAILED,
+        actor_type="system",
+        actor_id="pipeline",
+        event_reasons=(error_code,),
     )
 
 
@@ -340,7 +344,11 @@ def approve(
 
 
 def reject(
-    record: ReviewRecord, *, reviewer_id: str, reason_code: str, at: datetime | None = None
+    record: ReviewRecord,
+    *,
+    reviewer_id: str,
+    reason_code: str,
+    at: datetime | None = None,
 ) -> ReviewRecord:
     if not reviewer_id:
         raise ReviewTransitionError("reviewer_required")
