@@ -9,8 +9,9 @@ def test_get_azure_config_success(monkeypatch: pytest.MonkeyPatch):
         "https://test.cognitiveservices.azure.com/",
     )
     monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_KEY", "fake-key")
+    monkeypatch.delenv("ENABLE_LLM", raising=False)
 
-    endpoint, key = get_azure_config()
+    endpoint, key, model_id, enable_llm, deployment = get_azure_config()
     assert endpoint == "https://test.cognitiveservices.azure.com/"
     assert key == "fake-key"
 

@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -6,9 +6,11 @@ from azure_scanner.service import DocumentScannerService
 
 
 @patch("azure_scanner.service.DocumentIntelligenceClient")
-@patch("builtins.open", new_callable=mock_open, read_data=b"fake-image-bytes")
+@patch("azure_scanner.service.preprocess_image", return_value=b"fake-image-bytes")
 @patch("os.path.exists", return_value=True)
-def test_analyze_document_success(mock_client_cls: MagicMock):
+def test_analyze_document_success(
+    _mock_exists: MagicMock, _mock_preprocess: MagicMock, mock_client_cls: MagicMock
+):
     mock_client = mock_client_cls.return_value
     mock_poller = MagicMock()
     mock_result = MagicMock()
