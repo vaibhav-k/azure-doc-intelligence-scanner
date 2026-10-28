@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from azure_scanner.config import Settings, load_settings
 from azure_scanner.errors import ConfigurationError
@@ -114,5 +115,7 @@ def test_importing_config_has_no_side_effects(monkeypatch: pytest.MonkeyPatch, t
 def test_settings_is_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(DI, "https://x/")
     s = Settings()  # type: ignore[call-arg]
-    with pytest.raises(Exception):  # noqa: B017 - pydantic frozen instance error
+
+    # Catch the specific Pydantic ValidationError raised by frozen models
+    with pytest.raises(ValidationError):
         s.environment = "prod"  # type: ignore[misc]

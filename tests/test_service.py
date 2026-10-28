@@ -119,19 +119,23 @@ def test_constructor_validates_timeout() -> None:
 
 
 def test_logs_contain_no_paths_or_sdk_messages(
-    page_png: bytes, tmp_path, caplog: pytest.LogCaptureFixture
-) -> None:  # type: ignore[no-untyped-def]
+    page_png: bytes, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     caplog.set_level(logging.DEBUG)
     path: Path = tmp_path / f"{PHI_SENTINELS[0]}_scan.png"
     path.write_bytes(page_png)
+
     client = MagicMock()
     client.begin_analyze_document.side_effect = HttpResponseError(message=f"echo {PHI_SENTINELS[2]}")
+
     with pytest.raises(OcrError) as exc:
         _svc(client).analyze_document(str(path), correlation_id="c1")
+
     assert PHI_SENTINELS[2] not in str(exc.value)
     for record in caplog.records:
         text = record.getMessage() + repr(getattr(record, "safe_fields", {}))
-        assert PHI_SENTINELS[0] not in text and PHI_SENTINELS[2] not in text
+        assert PHI_SENTINELS[0] not in text
+        assert PHI_SENTINELS[2] not in text
 
 
 @pytest.mark.parametrize("with_key", [True, False])

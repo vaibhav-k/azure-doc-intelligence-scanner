@@ -19,7 +19,6 @@ from __future__ import annotations
 import enum
 import logging
 from dataclasses import dataclass, field
-from typing import cast
 
 import cv2
 import numpy as np
@@ -130,15 +129,29 @@ def _drop_edge_artifacts(mask: np.ndarray) -> np.ndarray:
     """Remove large components touching the image edge (table edges, scanner shadows, borders)."""
     h, w = mask.shape
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    keep: np.ndarray = np.ones(n, dtype=bool)
+
+    keep = np.ones(n, dtype=bool)
     keep[0] = False
     for i in range(1, n):
-        x, y, bw, bh, area = stats[i]
+        # Unpack stats safely
+        stat_row = stats[i]
+        x, y, bw, bh, area = (
+            int(stat_row[0]),
+            int(stat_row[1]),
+            int(stat_row[2]),
+            int(stat_row[3]),
+            int(stat_row[4]),
+        )
+
         touches = x == 0 or y == 0 or x + bw >= w or y + bh >= h
         large = area > 0.005 * h * w or bw > 0.5 * w or bh > 0.5 * h
         if touches and large:
             keep[i] = False
-    out: np.ndarray = cast(np.ndarray, keep[labels]).astype(np.uint8)
+
+    # Use np.isin or a boolean mask lookup that satisfies NumPy stubs cleanly,
+    # or map valid indices directly:
+    valid_labels = np.nonzero(keep)[0]
+    out = np.isin(labels, valid_labels).astype(np.uint8) * 255  # or binary mask 1/0
     return out
 
 

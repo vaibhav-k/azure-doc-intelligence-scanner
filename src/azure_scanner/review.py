@@ -80,7 +80,7 @@ class ReviewPolicy:
     identity_fields: tuple[str, ...] = ("patient_name", "patient_dob_or_age")
     # Fail-safe escalation: ANY review reason makes the document ``priority`` unless the reason is
     # listed here. Empty by default; add codes only with clinical sign-off.
-    routine_reasons: frozenset[str] = field(default_factory=frozenset)
+    routine_reasons: frozenset[str] = field(default_factory=frozenset[str])
 
 
 _TRAILING_ZERO = re.compile(r"\b\d+\.0+\b")  # "5.0 mg" can be misread as 50 mg
@@ -102,6 +102,56 @@ def _find_in_source(needle: str, content: str) -> list[tuple[int, int]]:
     return [(m.start(), m.end() - m.start()) for m in pattern.finditer(content)]
 
 
+def _check_status(value: ExtractedField, reasons: list[str]) -> None:
+    if value.status in (FieldStatus.AMBIGUOUS, FieldStatus.ILLEGIBLE):
+        reasons.append(value.status.value)
+
+
+def _check_source_and_confidence(
+    value: ExtractedField,
+    content: str,
+    ocr: OcrConfidenceReport,
+    policy: ReviewPolicy,
+    reasons: list[str],
+) -> tuple[bool | None, float | None]:
+    if not value.verbatim:
+        return None, None
+
+    hits = _find_in_source(value.verbatim, content)
+    found = bool(hits)
+    if not found:
+        reasons.append("not_found_in_source")
+        return found, None
+
+    words = [w for off, n in hits for w in words_in_span(ocr, off, n)]
+    known = [w.confidence for w in words if w.confidence is not None]
+
+    if not words or len(known) < len(words):
+        reasons.append("ocr_confidence_unknown")
+
+    min_conf = min(known) if known else None
+    if min_conf is not None and min_conf < policy.ocr_confidence_threshold:
+        reasons.append("ocr_low_confidence")
+
+    return found, min_conf
+
+
+def _check_formatting_and_identity(
+    path: str, value: ExtractedField, policy: ReviewPolicy, reasons: list[str]
+) -> None:
+    leaf = path.rsplit(".", 1)[-1]
+
+    if value.normalized is not None and _numbers(value.normalized) != _numbers(value.verbatim):
+        reasons.append("normalization_changed_numbers")
+
+    if leaf in policy.decimal_checked_fields and value.verbatim:
+        if _TRAILING_ZERO.search(value.verbatim) or _NAKED_DECIMAL.search(value.verbatim):
+            reasons.append("error_prone_decimal")
+
+    if path in policy.identity_fields and value.is_uncertain:
+        reasons.append("identity_uncertain")
+
+
 def assess_field(
     path: str,
     value: ExtractedField,
@@ -110,34 +160,10 @@ def assess_field(
     policy: ReviewPolicy,
 ) -> FieldAssessment:
     reasons: list[str] = []
-    leaf = path.rsplit(".", 1)[-1]
-    if value.status in (FieldStatus.AMBIGUOUS, FieldStatus.ILLEGIBLE):
-        reasons.append(value.status.value)
 
-    found: bool | None = None
-    min_conf: float | None = None
-    if value.verbatim:
-        hits = _find_in_source(value.verbatim, content)
-        found = bool(hits)
-        if not hits:
-            reasons.append("not_found_in_source")
-        else:
-            words = [w for off, n in hits for w in words_in_span(ocr, off, n)]
-            known = [w.confidence for w in words if w.confidence is not None]
-            if not words or len(known) < len(words):
-                reasons.append("ocr_confidence_unknown")
-            if known:
-                min_conf = min(known)
-                if min_conf < policy.ocr_confidence_threshold:
-                    reasons.append("ocr_low_confidence")
-
-    if value.normalized is not None and _numbers(value.normalized) != _numbers(value.verbatim):
-        reasons.append("normalization_changed_numbers")
-    if leaf in policy.decimal_checked_fields and value.verbatim:
-        if _TRAILING_ZERO.search(value.verbatim) or _NAKED_DECIMAL.search(value.verbatim):
-            reasons.append("error_prone_decimal")
-    if path in policy.identity_fields and value.is_uncertain:
-        reasons.append("identity_uncertain")
+    _check_status(value, reasons)
+    found, min_conf = _check_source_and_confidence(value, content, ocr, policy, reasons)
+    _check_formatting_and_identity(path, value, policy, reasons)
 
     return FieldAssessment(
         path=path,

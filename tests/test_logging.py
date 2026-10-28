@@ -5,7 +5,12 @@ import logging
 
 import pytest
 
-from azure_scanner.logging_utils import SafeJsonFormatter, log_event, new_correlation_id
+from azure_scanner.logging_utils import (
+    QUIET_THIRD_PARTY_LOGGERS,
+    SafeJsonFormatter,
+    log_event,
+    new_correlation_id,
+)
 from tests.conftest import PHI_SENTINELS
 
 
@@ -72,3 +77,27 @@ def test_configure_logging_installs_safe_formatter() -> None:
     finally:
         root.handlers[:] = saved[0]
         root.setLevel(saved[1])
+
+
+@pytest.mark.parametrize("name", ["httpx", "httpx2", "httpcore", "httpcore2", "urllib3", "azure"])
+def test_configure_logging_silences_http_client_info_logs(
+    name: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression: openai 3.x logs 'HTTP Request: ...' at INFO via ``httpx2``, which was not silenced."""
+    from azure_scanner.logging_utils import configure_logging
+
+    assert name in QUIET_THIRD_PARTY_LOGGERS
+    root = logging.getLogger()
+    saved = (root.handlers[:], root.level)
+    try:
+        configure_logging("INFO")
+        logging.getLogger(name).info("HTTP Request: %s %s", "POST", "https://example.invalid/x")
+        logging.getLogger(name).warning("still visible")
+        err = capsys.readouterr().err
+        assert "HTTP Request" not in err
+        assert "still visible" in err
+    finally:
+        root.handlers[:] = saved[0]
+        root.setLevel(saved[1])
+        for n in QUIET_THIRD_PARTY_LOGGERS:
+            logging.getLogger(n).setLevel(logging.NOTSET)

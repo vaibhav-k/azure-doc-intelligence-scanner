@@ -1,4 +1,5 @@
-"""Accuro EMR integration status - NO adapter is implemented yet, deliberately.
+"""
+Accuro EMR integration status - NO adapter is implemented yet, deliberately.
 
 Public information reviewed (October 2026): an endpoint index on a QHR developer host
 (apidocs.dev.qhrtech.com/docs/resources.html) lists provider-level patient-document listing,

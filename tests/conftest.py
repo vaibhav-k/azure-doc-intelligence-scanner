@@ -6,7 +6,7 @@ Real clinical documents must never be added to ``tests/`` (see .gitignore and RE
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from types import SimpleNamespace as NS
 from typing import Any
 
@@ -19,13 +19,12 @@ PHI_SENTINELS = ("ZZPATIENT-SMITHERSON", "ZZDOB-1901-02-03", "ZZDRUG-QUANTRAXOL"
 
 
 @pytest.fixture(autouse=True)
-def _isolate_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Iterator[None]:
+def _isolate_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     """Unit tests must not depend on a developer's shell, .env file, or Azure credentials."""
     for key in list(os.environ):
         if key.startswith(("AZURE_", "ENABLE_LLM", "ENVIRONMENT", "PREPROCESS_", "OCR_", "LLM_")):
             monkeypatch.delenv(key, raising=False)
     monkeypatch.chdir(tmp_path)  # no stray .env in the CWD
-    yield
 
 
 def synthetic_page(
@@ -73,7 +72,8 @@ def make_word(content: str, confidence: Any, offset: int = 0, length: int | None
 def ocr_result_from_text(text: str, confidences: dict[str, float | None] | None = None) -> NS:
     """Build a fake Document Intelligence AnalyzeResult with correct word spans."""
     confidences = confidences or {}
-    words, pos = [], 0
+    words: list[Any] = []
+    pos = 0
     for token in text.split():
         offset = text.index(token, pos)
         pos = offset + len(token)

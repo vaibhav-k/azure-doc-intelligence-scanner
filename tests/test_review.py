@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from azure_scanner.confidence import evaluate_ocr_confidence
-from azure_scanner.models import HumanConfirmation
+from azure_scanner.models import ClinicalDocumentExtraction, HumanConfirmation
 from azure_scanner.review import (
     ReviewPolicy,
     ReviewPriority,
@@ -28,7 +28,12 @@ POLICY = ReviewPolicy()
 T0 = datetime(2026, 10, 28, tzinfo=timezone.utc)
 
 
-def _route(extraction, text=CLEAN_TEXT, confidences=None, llm_enabled=True) -> ReviewRecord:  # type: ignore[no-untyped-def]
+def _route(
+    extraction: ClinicalDocumentExtraction,
+    text=CLEAN_TEXT,
+    confidences=None,
+    llm_enabled=True,
+) -> ReviewRecord:  # type: ignore[no-untyped-def]
     ocr = evaluate_ocr_confidence(ocr_result_from_text(text, confidences))
     return route_for_review(
         new_record("c1"),
@@ -83,7 +88,8 @@ def test_schema_valid_clean_extraction_still_needs_review() -> None:
 def test_uncertain_medication_elements_route_to_priority_review(field_name: str, value, reason: str) -> None:  # type: ignore[no-untyped-def]
     m = clean_med().model_copy(update={field_name: value})
     record = _route(doc(medications=[m]))
-    assert record.status is ReviewStatus.NEEDS_REVIEW and record.priority is ReviewPriority.PRIORITY
+    assert record.status is ReviewStatus.NEEDS_REVIEW
+    assert record.priority is ReviewPriority.PRIORITY
     flagged = {a.path: a.review_reasons for a in record.field_assessments}
     assert reason in flagged[f"medications[0].{field_name}"]
 
@@ -113,7 +119,8 @@ def test_value_absent_from_ocr_source_is_flagged_as_possible_hallucination() -> 
     m = clean_med().model_copy(update={"strength": fld("20 mg")})  # OCR says "2 mg"
     record = _route(doc(medications=[m]))
     a = next(a for a in record.field_assessments if a.path == "medications[0].strength")
-    assert a.found_in_source is False and "not_found_in_source" in a.review_reasons
+    assert a.found_in_source is False
+    assert "not_found_in_source" in a.review_reasons
     assert record.priority is ReviewPriority.PRIORITY
 
 
@@ -174,7 +181,8 @@ def test_uncertain_allergy_and_identity_flagged() -> None:
 def test_every_reason_escalates_to_priority_by_default(kwargs: dict, reason: str) -> None:  # type: ignore[type-arg]
     extraction = kwargs.pop("extraction", doc(medications=[clean_med()]))
     record = _route(extraction, **kwargs)
-    assert reason in record.reasons and record.priority is ReviewPriority.PRIORITY
+    assert reason in record.reasons
+    assert record.priority is ReviewPriority.PRIORITY
 
 
 def test_routine_reasons_are_an_explicit_opt_in() -> None:
@@ -189,7 +197,8 @@ def test_routine_reasons_are_an_explicit_opt_in() -> None:
         policy=policy,
         llm_enabled=True,
     )
-    assert record.priority is ReviewPriority.ROUTINE and record.status is ReviewStatus.NEEDS_REVIEW
+    assert record.priority is ReviewPriority.ROUTINE
+    assert record.status is ReviewStatus.NEEDS_REVIEW
 
 
 def test_ocr_document_flags_propagate() -> None:
@@ -208,7 +217,9 @@ def test_llm_disabled_requires_manual_transcription_and_cannot_be_approved() -> 
 def test_assess_field_not_present_has_unknown_provenance() -> None:
     ocr = evaluate_ocr_confidence(ocr_result_from_text(CLEAN_TEXT))
     a = assess_field("route", fld(), ocr, CLEAN_TEXT, POLICY)
-    assert a.found_in_source is None and a.ocr_min_confidence is None and a.review_reasons == ()
+    assert a.found_in_source is None
+    assert a.ocr_min_confidence is None
+    assert a.review_reasons == ()
 
 
 # ---------------------------------------------------------------- state machine
@@ -232,7 +243,8 @@ def test_approval_requires_confirmation_of_every_consequential_field() -> None:
         at=T0,
     )
     assert approved.status is ReviewStatus.APPROVED
-    assert approved.events[-1].actor_type == "clinician" and approved.events[-1].actor_id == "dr-reviewer-01"
+    assert approved.events[-1].actor_type == "clinician"
+    assert approved.events[-1].actor_id == "dr-reviewer-01"
     assert record.status is ReviewStatus.NEEDS_REVIEW  # records are immutable
 
 
@@ -315,5 +327,6 @@ def test_status_changes_are_recorded_and_logged_without_phi(
     ]
     logged = " ".join(r.getMessage() + repr(getattr(r, "safe_fields", "")) for r in caplog.records)
     assert "review_status_changed" in logged
-    assert all(s not in logged for s in PHI_SENTINELS) and "dr-reviewer-01" not in logged
+    assert all(s not in logged for s in PHI_SENTINELS)
+    assert "dr-reviewer-01" not in logged
     assert all(s not in " ".join(record.reasons) for s in PHI_SENTINELS)

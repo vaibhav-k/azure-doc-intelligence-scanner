@@ -240,6 +240,73 @@ class LlmExtractor:
             max_input_chars=settings.llm_max_input_chars,
         )
 
+    def _handle_openai_error(self, exc: Exception) -> None:
+        if isinstance(exc, openai.LengthFinishReasonError):
+            raise LlmTruncatedError("output_truncated") from exc
+        if isinstance(exc, openai.ContentFilterFinishReasonError):
+            raise LlmContentFilterError("content_filtered") from exc
+        if isinstance(exc, ValidationError):
+            raise LlmSchemaError("schema_validation_failed", detail=str(exc.error_count())) from exc
+        if isinstance(exc, openai.APITimeoutError):
+            raise LlmTimeoutError("llm_timeout") from exc
+        if isinstance(exc, openai.APIConnectionError):
+            raise LlmTransientError("llm_connection_error") from exc
+        if isinstance(exc, openai.RateLimitError):
+            raise LlmRateLimitError("llm_rate_limited", detail="429") from exc
+        if isinstance(exc, (openai.AuthenticationError, openai.PermissionDeniedError)):
+            raise LlmAuthError("llm_auth_failed", detail=str(_status_code(exc))) from exc
+        if isinstance(exc, openai.NotFoundError):
+            raise LlmConfigurationError("llm_deployment_not_found", detail="404") from exc
+        if isinstance(exc, openai.BadRequestError):
+            if getattr(exc, "code", None) == "content_filter":
+                raise LlmContentFilterError("prompt_content_filtered") from exc
+            param = getattr(exc, "param", None)
+            raise LlmRequestError(
+                "llm_bad_request", detail=param if isinstance(param, str) else None
+            ) from exc
+        if isinstance(exc, openai.InternalServerError):
+            raise LlmTransientError("llm_server_error", detail=str(_status_code(exc))) from exc
+        if isinstance(exc, openai.APIStatusError):
+            raise LlmRequestError("llm_http_error", detail=str(_status_code(exc))) from exc
+        raise exc
+
+    def _validate_completion(self, completion: Any) -> tuple[Any, Any]:
+        choice = completion.choices[0]
+        message = choice.message
+        if getattr(message, "refusal", None):
+            raise LlmRefusalError("model_refused")
+        if choice.finish_reason == "length":
+            raise LlmTruncatedError("output_truncated")
+        if choice.finish_reason == "content_filter":
+            raise LlmContentFilterError("content_filtered")
+        parsed = message.parsed
+        if not isinstance(parsed, ClinicalDocumentExtraction):
+            raise LlmSchemaError("unparsed_response")
+        return parsed, choice
+
+    def _call_and_parse(self, kwargs: dict[str, Any]) -> tuple[Any, Any, Any]:
+        completion: Any = None
+        try:
+            completion = self._client.chat.completions.parse(**kwargs)
+        except (
+            openai.LengthFinishReasonError,
+            openai.ContentFilterFinishReasonError,
+            ValidationError,
+            openai.APITimeoutError,
+            openai.APIConnectionError,
+            openai.RateLimitError,
+            openai.AuthenticationError,
+            openai.PermissionDeniedError,
+            openai.NotFoundError,
+            openai.BadRequestError,
+            openai.InternalServerError,
+            openai.APIStatusError,
+        ) as exc:
+            self._handle_openai_error(exc)
+
+        parsed, choice = self._validate_completion(completion)
+        return completion, parsed, choice
+
     def extract(self, document_text: str, *, correlation_id: str) -> ExtractionOutcome:
         if not document_text or not document_text.strip():
             raise LlmInputError("empty_document_text")
@@ -254,48 +321,7 @@ class LlmExtractor:
         if self._temperature is not None:
             kwargs["temperature"] = self._temperature
 
-        try:
-            completion = self._client.chat.completions.parse(**kwargs)
-        except openai.LengthFinishReasonError as exc:
-            raise LlmTruncatedError("output_truncated") from exc
-        except openai.ContentFilterFinishReasonError as exc:
-            raise LlmContentFilterError("content_filtered") from exc
-        except ValidationError as exc:
-            raise LlmSchemaError("schema_validation_failed", detail=str(exc.error_count())) from exc
-        except openai.APITimeoutError as exc:  # subclass of APIConnectionError: must come first
-            raise LlmTimeoutError("llm_timeout") from exc
-        except openai.APIConnectionError as exc:
-            raise LlmTransientError("llm_connection_error") from exc
-        except openai.RateLimitError as exc:
-            raise LlmRateLimitError("llm_rate_limited", detail="429") from exc
-        except (openai.AuthenticationError, openai.PermissionDeniedError) as exc:
-            raise LlmAuthError("llm_auth_failed", detail=str(_status_code(exc))) from exc
-        except openai.NotFoundError as exc:
-            raise LlmConfigurationError("llm_deployment_not_found", detail="404") from exc
-        except openai.BadRequestError as exc:
-            if getattr(exc, "code", None) == "content_filter":
-                raise LlmContentFilterError("prompt_content_filtered") from exc
-            param = getattr(exc, "param", None)  # a parameter NAME (e.g. "temperature"), never content
-            raise LlmRequestError(
-                "llm_bad_request", detail=param if isinstance(param, str) else None
-            ) from exc
-        except openai.InternalServerError as exc:
-            raise LlmTransientError("llm_server_error", detail=str(_status_code(exc))) from exc
-        except openai.APIStatusError as exc:
-            raise LlmRequestError("llm_http_error", detail=str(_status_code(exc))) from exc
-
-        choice = completion.choices[0]
-        message = choice.message
-        if getattr(message, "refusal", None):
-            raise LlmRefusalError("model_refused")
-        if choice.finish_reason == "length":
-            raise LlmTruncatedError("output_truncated")
-        if choice.finish_reason == "content_filter":
-            raise LlmContentFilterError("content_filtered")
-        parsed = message.parsed
-        if not isinstance(parsed, ClinicalDocumentExtraction):
-            raise LlmSchemaError("unparsed_response")
-
+        completion, parsed, choice = self._call_and_parse(kwargs)
         usage = getattr(completion, "usage", None)
         outcome = ExtractionOutcome(
             extraction=parsed,

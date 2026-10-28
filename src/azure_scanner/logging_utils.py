@@ -100,6 +100,19 @@ class _BelowWarningFilter(logging.Filter):
 
 
 _SDK_PAYLOAD_LOGGERS = ("openai", "openai._base_client")
+
+# Third-party loggers held at WARNING by ``configure_logging``: HTTP stacks can emit URLs and headers
+# at INFO/DEBUG. openai 1.x/2.x uses httpx/httpcore; openai 3.x uses httpx2/httpcore2.
+QUIET_THIRD_PARTY_LOGGERS: tuple[str, ...] = (
+    "azure",
+    "azure.core.pipeline.policies.http_logging_policy",
+    "httpx",
+    "httpcore",
+    "httpx2",
+    "httpcore2",
+    "openai",
+    "urllib3",
+)
 _guard = _BelowWarningFilter()
 
 
@@ -124,12 +137,5 @@ def configure_logging(level: str = "INFO") -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level.upper())
-    # Third-party HTTP loggers can emit URLs and headers at DEBUG; keep them quiet.
-    for noisy in (
-        "azure",
-        "azure.core.pipeline.policies.http_logging_policy",
-        "httpx",
-        "openai",
-        "urllib3",
-    ):
+    for noisy in QUIET_THIRD_PARTY_LOGGERS:
         logging.getLogger(noisy).setLevel(logging.WARNING)
