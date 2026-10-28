@@ -25,7 +25,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from azure_scanner import __version__
 from azure_scanner.confidence import (
@@ -117,6 +117,9 @@ class ProcessingResult(BaseModel):
     input_format: str | None = None
     preprocessing: dict[str, Any] | None = None
     ocr: OcrSummary | None = None
+    # Full OCR text (PHI). Kept so reviewers and manual transcription can work from what the
+    # service read. Excluded from ``repr`` and from ``safe_summary``; never log it.
+    ocr_content: str | None = Field(default=None, repr=False)
     ocr_review_items: tuple[OcrReviewItemOut, ...] = ()
     llm: LlmSummary
     extraction: ClinicalDocumentExtraction | None = None
@@ -228,6 +231,7 @@ class DocumentPipeline:
                 "deskew_angle": (
                     prepared.deskew.angle if prepared.deskew and prepared.deskew.applied else None
                 ),
+                "page_count": prepared.page_count,
             }
             done.append("preprocessing")  # preparation covers validation + preprocessing
 
@@ -236,6 +240,7 @@ class DocumentPipeline:
                 lambda: self.scanner.run_ocr(prepared.payload, correlation_id=cid),
             )
             content: str = getattr(result, "content", None) or ""
+            state["ocr_content"] = content or None
 
             report: OcrConfidenceReport = timed(
                 "confidence_assessment",
@@ -262,6 +267,13 @@ class DocumentPipeline:
             )
             if not content.strip() or report.flags & {OcrFlag.NO_PAGES}:
                 raise OcrError("ocr_no_text_detected")
+            if prepared.page_count is not None and report.page_count != prepared.page_count:
+                # e.g. the free tier analyses only the first 2 pages. Partial OCR of a clinical
+                # document must never look complete, so fail closed.
+                raise OcrError(
+                    "ocr_page_count_mismatch",
+                    detail=f"{report.page_count}/{prepared.page_count}",
+                )
 
             extraction: ClinicalDocumentExtraction | None = None
             extractor = self.extractor

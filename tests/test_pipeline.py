@@ -256,3 +256,50 @@ def test_logs_and_safe_summary_never_contain_phi(
     for s in PHI_SENTINELS:
         assert s not in logged, s
         assert s not in summary, s
+
+
+# ------------------------------------------------------------------ OCR text and page coverage
+
+
+def test_ocr_text_is_kept_in_the_full_result_but_never_in_summary_or_repr(
+    page_png: bytes,
+) -> None:
+    text = f"{PHI_SENTINELS[0]} Rx Drug-X 5 mg BID"
+    pipe, _ = _pipeline(ocr_result_from_text(text), llm=False)
+    result = pipe.process(page_png)
+    assert result.processing_status is ProcessingStatus.COMPLETED
+    assert result.ocr_content == text  # available for manual transcription
+    assert PHI_SENTINELS[0] in result.model_dump_json()
+    assert PHI_SENTINELS[0] not in json.dumps(result.safe_summary())
+    assert PHI_SENTINELS[0] not in repr(result)
+
+
+def test_ocr_text_is_kept_when_llm_extraction_fails(page_png: bytes) -> None:
+    pipe, _ = _pipeline(recorder=Recorder([status(401)]))
+    result = pipe.process(page_png)
+    _assert_failed(result, "llm_extraction", "llm_auth_failed")
+    assert result.ocr_content == CLEAN_TEXT
+
+
+def test_ocr_returning_fewer_pages_than_the_input_fails_closed() -> None:
+    from types import SimpleNamespace as NS
+
+    from tests.conftest import make_pdf
+
+    one_page = ocr_result_from_text(CLEAN_TEXT)
+    two_pages = NS(content=one_page.content, pages=[one_page.pages[0], one_page.pages[0]])
+    rec = Recorder([ok()])
+    pipe, _ = _pipeline(two_pages, rec)
+    result = pipe.process(make_pdf(3))  # e.g. the free tier analyses only the first 2 pages
+    _assert_failed(result, "ocr", "ocr_page_count_mismatch")
+    assert result.retryable is False
+    assert result.ocr is not None and result.ocr.page_count == 2
+    assert result.preprocessing is not None and result.preprocessing["page_count"] == 3
+    assert rec.requests == []  # partial text never reaches the LLM
+
+
+def test_matching_page_count_passes(page_png: bytes) -> None:
+    pipe, _ = _pipeline(llm=False)
+    result = pipe.process(page_png)
+    assert result.processing_status is ProcessingStatus.COMPLETED
+    assert result.preprocessing is not None and result.preprocessing["page_count"] == 1
