@@ -113,6 +113,63 @@ def _page_number(page: Any, index: int) -> int:
     return n if isinstance(n, int) and not isinstance(n, bool) else index + 1
 
 
+def _process_word(
+    word: Any, page_no: int, threshold: float
+) -> tuple[OcrWord, list[ReviewItem], float | None]:
+    content = getattr(word, "content", None) or ""
+    span = getattr(word, "span", None)
+    poly = getattr(word, "polygon", None)
+    offset = getattr(span, "offset", None)
+    length = getattr(span, "length", None)
+
+    value, problem = _read_confidence(getattr(word, "confidence", None))
+
+    ocr_word = OcrWord(
+        page=page_no,
+        content=content,
+        confidence=value,
+        span_offset=offset if isinstance(offset, int) else None,
+        span_length=length if isinstance(length, int) else None,
+        polygon=tuple(float(p) for p in poly) if poly else None,
+    )
+
+    item_list: list[ReviewItem] = []
+    if problem is not None:
+        item_list.append(_item(ocr_word, problem, None))
+        return ocr_word, item_list, None
+
+    if value is not None and value < threshold:
+        item_list.append(_item(ocr_word, OcrFlag.LOW_CONFIDENCE, round(value, 4)))
+
+    return ocr_word, item_list, value
+
+
+def _process_page(
+    page: Any, index: int, threshold: float
+) -> tuple[list[OcrWord], list[ReviewItem], list[float]]:
+    page_no = _page_number(page, index)
+    words = list(getattr(page, "words", None) or [])
+
+    if not words:
+        has_lines = bool(getattr(page, "lines", None))
+        flag = OcrFlag.UNSCORED_PAGE if has_lines else OcrFlag.NO_TEXT
+        empty_items: list[ReviewItem] = [ReviewItem(page=page_no, flag=flag, confidence=None)]
+        return [], empty_items, []
+
+    words_out: list[OcrWord] = []
+    items_out: list[ReviewItem] = []
+    scores_out: list[float] = []
+
+    for word in words:
+        w_obj, w_items, score = _process_word(word, page_no, threshold)
+        words_out.append(w_obj)
+        items_out.extend(w_items)
+        if score is not None:
+            scores_out.append(score)
+
+    return words_out, items_out, scores_out
+
+
 def evaluate_ocr_confidence(
     result: Any, threshold: float = DEFAULT_OCR_CONFIDENCE_THRESHOLD
 ) -> OcrConfidenceReport:
@@ -128,36 +185,10 @@ def evaluate_ocr_confidence(
     scores: list[float] = []
 
     for index, page in enumerate(pages):
-        page_no = _page_number(page, index)
-        words = list(getattr(page, "words", None) or [])
-        if not words:
-            has_lines = bool(getattr(page, "lines", None))
-            flag = OcrFlag.UNSCORED_PAGE if has_lines else OcrFlag.NO_TEXT
-            items.append(ReviewItem(page=page_no, flag=flag, confidence=None))
-            continue
-        for word in words:
-            content = getattr(word, "content", None) or ""
-            span = getattr(word, "span", None)
-            poly = getattr(word, "polygon", None)
-            offset = getattr(span, "offset", None)
-            length = getattr(span, "length", None)
-            value, problem = _read_confidence(getattr(word, "confidence", None))
-            ocr_word = OcrWord(
-                page=page_no,
-                content=content,
-                confidence=value,
-                span_offset=offset if isinstance(offset, int) else None,
-                span_length=length if isinstance(length, int) else None,
-                polygon=tuple(float(p) for p in poly) if poly else None,
-            )
-            words_out.append(ocr_word)
-            if problem is not None:
-                items.append(_item(ocr_word, problem, None))
-                continue
-            assert value is not None
-            scores.append(value)
-            if value < threshold:
-                items.append(_item(ocr_word, OcrFlag.LOW_CONFIDENCE, round(value, 4)))
+        p_words, p_items, p_scores = _process_page(page, index, threshold)
+        words_out.extend(p_words)
+        items.extend(p_items)
+        scores.extend(p_scores)
 
     return OcrConfidenceReport(
         threshold=threshold,

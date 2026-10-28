@@ -92,18 +92,77 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _process_item(
+    index: int,
+    path: Path,
+    pipeline: DocumentPipeline,
+    out_dir: Path,
+    manifest: Path,
+    seen: dict[str, str],
+) -> tuple[bool, str | None]:
+    cid = new_correlation_id()
+    try:
+        data = path.read_bytes()
+    except OSError:
+        log_event(
+            logger,
+            logging.ERROR,
+            "input_unreadable",
+            correlation_id=cid,
+            error_code="input_unreadable",
+        )
+        _emit(
+            {
+                "index": index,
+                "correlation_id": cid,
+                "processing_status": "failed",
+                "error_code": "input_unreadable",
+            }
+        )
+        return True, None
+
+    digest = sha256_hex(data)
+    if digest in seen:
+        _emit(
+            {
+                "index": index,
+                "duplicate_of": seen[digest],
+                "processing_status": "skipped_duplicate",
+            }
+        )
+        return False, None
+
+    seen[digest] = cid
+    result = pipeline.process(data, correlation_id=cid)
+    _write_private(out_dir / f"{cid}.json", result.model_dump_json(indent=2))
+    _append_private(
+        manifest,
+        json.dumps(
+            {
+                "index": index,
+                "input_path": str(path),
+                "correlation_id": cid,
+                "source_sha256": digest,
+            }
+        ),
+    )
+    failed = result.processing_status is ProcessingStatus.FAILED
+    _emit({"index": index, **result.safe_summary()})
+    return failed, digest
+
+
 def main(argv: list[str] | None = None, *, pipeline: DocumentPipeline | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
-    except SystemExit as exc:  # argparse exits on --help / usage errors
-        return 0 if exc.code in (0, None) else 2
+    except SystemExit as exc:  # argparse exits on --help (0) and usage errors (2)
+        return exc.code if isinstance(exc.code, int) else 2
 
     if pipeline is None:
         env_file = args.env_file if args.env_file and Path(args.env_file).is_file() else None
         try:
             settings = load_settings(env_file)
         except PipelineError as exc:
-            sys.stderr.write(f"configuration error: {exc.detail}\n")  # variable names only
+            sys.stderr.write(f"configuration error: {exc.detail}\n")
             return 2
         configure_logging(settings.log_level)
         pipeline = build_pipeline(settings, use_llm=settings.enable_llm and not args.no_llm)
@@ -115,54 +174,9 @@ def main(argv: list[str] | None = None, *, pipeline: DocumentPipeline | None = N
     any_failed = False
 
     for index, path in enumerate(args.inputs):
-        cid = new_correlation_id()
-        try:
-            data = path.read_bytes()
-        except OSError:
+        failed, _ = _process_item(index, path, pipeline, out_dir, manifest, seen)
+        if failed:
             any_failed = True
-            log_event(
-                logger,
-                logging.ERROR,
-                "input_unreadable",
-                correlation_id=cid,
-                error_code="input_unreadable",
-            )
-            _emit(
-                {
-                    "index": index,
-                    "correlation_id": cid,
-                    "processing_status": "failed",
-                    "error_code": "input_unreadable",
-                }
-            )
-            continue
-        digest = sha256_hex(data)
-        if digest in seen:
-            _emit(
-                {
-                    "index": index,
-                    "duplicate_of": seen[digest],
-                    "processing_status": "skipped_duplicate",
-                }
-            )
-            continue
-        seen[digest] = cid
-
-        result = pipeline.process(data, correlation_id=cid)
-        _write_private(out_dir / f"{cid}.json", result.model_dump_json(indent=2))
-        _append_private(
-            manifest,
-            json.dumps(
-                {
-                    "index": index,
-                    "input_path": str(path),
-                    "correlation_id": cid,
-                    "source_sha256": digest,
-                }
-            ),
-        )
-        any_failed |= result.processing_status is ProcessingStatus.FAILED
-        _emit({"index": index, **result.safe_summary()})
 
     return 1 if any_failed else 0
 

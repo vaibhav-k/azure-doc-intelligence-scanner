@@ -128,6 +128,8 @@ class DocumentScannerService:
             result = poller.result(timeout=self.timeout_seconds)
             if not poller.done():
                 raise OcrError("ocr_timeout", retryable=True)
+            if result is None:
+                raise OcrError("ocr_empty_result")
         except OcrError:
             raise
         except ClientAuthenticationError as exc:
