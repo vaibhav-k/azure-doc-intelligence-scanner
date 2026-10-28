@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     azure_openai_api_version: str | None = None
     azure_openai_token_scope: str | None = None  # override the Entra ID scope if your resource needs it
     # Unset => temperature is NOT sent (server default). Compatibility of explicit values with the
-    # configured deployment is unverified - see README "Azure compatibility status".
+    # configured deployment is unverified - see README "Known limitations and unverified items".
     llm_temperature: float | None = Field(default=None, ge=0, le=2)
     llm_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     llm_max_retries: int = Field(default=2, ge=0, le=5)
@@ -90,7 +90,7 @@ def load_settings(env_file: str | None = ".env") -> Settings:
     try:
         return Settings(_env_file=env_file)  # type: ignore[call-arg]
     except ValidationError as exc:
-        problems = []
+        problems: list[str] = []
         for err in exc.errors(include_input=False, include_url=False):
             loc = ".".join(str(p) for p in err["loc"]).upper() or "SETTINGS"
             msg = str(err.get("msg", "invalid")).removeprefix("Value error, ")

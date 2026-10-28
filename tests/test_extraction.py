@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from collections.abc import Iterator
+from typing import Any, cast
 
 import pytest
 from openai.lib._pydantic import to_strict_json_schema
@@ -85,7 +86,7 @@ def test_medical_prescription_empty_and_optional() -> None:
 # ---------------------------------------------------------------------------------------------
 
 
-def _f(verbatim=None, status="not_present", normalized=None, alternatives=None):  # type: ignore[no-untyped-def]
+def _f(verbatim=None, status="not_present", normalized=None, alternatives=None) -> dict[str, Any]:  # type: ignore[no-untyped-def]
     return {
         "verbatim": verbatim,
         "normalized": normalized,
@@ -117,15 +118,30 @@ def test_valid_field_states(data: dict) -> None:  # type: ignore[type-arg]
         (_f(None, "not_present", alternatives=["x"]), "not_present_must_be_empty"),
         (_f(None, "extracted"), "extracted_requires_verbatim"),
         (_f("  ", "extracted"), "extracted_requires_verbatim"),
-        (_f("bid", "extracted", alternatives=["tid"]), "extracted_must_not_have_alternatives"),
+        (
+            _f("bid", "extracted", alternatives=["tid"]),
+            "extracted_must_not_have_alternatives",
+        ),
         (_f("q?h", "illegible", normalized="q4h"), "illegible_cannot_be_normalized"),
         (_f(None, "ambiguous"), "ambiguous_requires_a_reading"),
         (_f(None, "extracted", normalized="500 mg"), "normalized_without_verbatim"),
         (_f("x" * 501, "extracted"), "text_too_long"),
-        (_f("a", "ambiguous", alternatives=[str(i) for i in range(6)]), "too_many_or_too_long_alternatives"),
-        ({**_f("x", "extracted"), "status": "inferred"}, "status"),  # no inferred status exists
-        ({**_f("x", "extracted"), "confidence": 0.99}, "confidence"),  # LLM cannot assert confidence
-        ({"verbatim": "x", "status": "extracted"}, "normalized"),  # missing required keys
+        (
+            _f("a", "ambiguous", alternatives=[str(i) for i in range(6)]),
+            "too_many_or_too_long_alternatives",
+        ),
+        (
+            {**_f("x", "extracted"), "status": "inferred"},
+            "status",
+        ),  # no inferred status exists
+        (
+            {**_f("x", "extracted"), "confidence": 0.99},
+            "confidence",
+        ),  # LLM cannot assert confidence
+        (
+            {"verbatim": "x", "status": "extracted"},
+            "normalized",
+        ),  # missing required keys
         (_f(123, "extracted"), "verbatim"),  # malformed type
     ],
 )
@@ -180,17 +196,24 @@ def test_iter_fields_paths() -> None:
     assert len(paths) == 6 + 9
 
 
-def _walk(node, depth=0):  # type: ignore[no-untyped-def]
+def _walk(node: Any, depth: int = 0) -> Iterator[tuple[int, dict[str, Any]]]:
     """Yield (object_depth, node) for every JSON-schema object node."""
     if isinstance(node, dict):
-        if node.get("type") == "object":
-            yield depth, node
-            depth += 1
-        for v in node.values():
-            yield from _walk(v, depth)
+        typed_node = cast(dict[str, Any], node)
+
+        if typed_node.get("type") == "object":
+            yield depth, typed_node
+            for v in typed_node.values():
+                yield from _walk(v, depth + 1)
+        else:
+            for v in typed_node.values():
+                yield from _walk(v, depth)
+
     elif isinstance(node, list):
-        for v in node:
-            yield from _walk(v, depth)
+        # Cast the list so MyPy knows its elements are Any
+        typed_list = cast(list[Any], node)
+        for item in typed_list:
+            yield from _walk(item, depth)
 
 
 UNSUPPORTED_KEYWORDS = (
@@ -220,7 +243,8 @@ UNSUPPORTED_KEYWORDS = (
 
 def test_schema_is_structured_outputs_compatible_offline() -> None:
     """Checks the documented Azure OpenAI Structured Outputs subset. Live acceptance by the actual
-    deployment is NOT verified by this test (see README: 'Azure compatibility status')."""
+    deployment is NOT verified by this test (see README: 'Known limitations and unverified items').
+    """
     schema = to_strict_json_schema(ClinicalDocumentExtraction)
     objects = list(_walk(schema))
     assert schema["type"] == "object"
