@@ -6,7 +6,7 @@ import sys
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from openai import AzureOpenAI
 
-from src.azure_scanner.models import MedicalPrescription
+from azure_scanner.models import MedicalPrescription
 
 
 def parse_markdown_with_gpt(

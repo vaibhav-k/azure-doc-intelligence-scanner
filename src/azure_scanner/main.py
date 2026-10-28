@@ -4,10 +4,10 @@ import sys
 
 from azure.core.exceptions import AzureError
 
-from src.azure_scanner.confidence import evaluate_ocr_confidence
-from src.azure_scanner.config import get_azure_config
-from src.azure_scanner.llm_parser import parse_markdown_with_gpt
-from src.azure_scanner.service import DocumentScannerService
+from azure_scanner.confidence import evaluate_ocr_confidence
+from azure_scanner.config import get_azure_config
+from azure_scanner.llm_parser import parse_markdown_with_gpt
+from azure_scanner.service import DocumentScannerService
 
 
 def main() -> None:

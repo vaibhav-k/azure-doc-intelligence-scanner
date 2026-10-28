@@ -9,7 +9,7 @@ from azure.ai.documentintelligence.models import (
 )
 from azure.core.credentials import AzureKeyCredential
 
-from src.azure_scanner.preprocessing import preprocess_image
+from azure_scanner.preprocessing import preprocess_image
 
 
 class DocumentScannerService:

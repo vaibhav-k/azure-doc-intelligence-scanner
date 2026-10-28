@@ -1,6 +1,6 @@
 import pytest
 
-from src.azure_scanner.config import get_azure_config
+from azure_scanner.config import get_azure_config
 
 
 def test_get_azure_config_success(monkeypatch: pytest.MonkeyPatch):
