@@ -20,7 +20,7 @@ input bytes ─► validation ─► preprocessing ─► Document Intelligence 
 
 | Module | Responsibility |
 |---|---|
-| `preprocessing.py` | Format sniffing, size and blank-page checks. Default `minimal` mode forwards the original image. Opt-in `enhanced` mode applies bounded deskew (±10°, never crops, refuses uncertain estimates), illumination flattening and light denoise. |
+| `preprocessing.py` | Format sniffing, size and blank-page checks, local page counting (PDF via PDFium, TIFF via its page directory). Default `minimal` mode forwards the original image. Opt-in `enhanced` mode applies bounded deskew (±10°, never crops, refuses uncertain estimates), illumination flattening and light denoise. |
 | `service.py` | Document Intelligence adapter: injected client, bounded SDK retries, explicit timeout detection, coded errors. |
 | `confidence.py` | Word-level OCR confidence. Missing or invalid scores are *unknown*, never 1.0. Line-only pages are flagged. |
 | `models.py` | Model-facing schema (`verbatim` / `normalized` / `status ∈ {extracted, ambiguous, illegible, not_present}` / `alternatives`) and review-layer models (OCR confidence, source provenance, human confirmations). |
@@ -141,7 +141,7 @@ A run writes to three places:
 |---|---|---|
 | **stderr** | JSON log lines (`input_prepared`, `ocr_completed`, `review_status_changed`, `document_processed`, ...) with correlation ID, timings and counts | No (allow-listed fields only) |
 | **stdout** | One JSON summary line per input (shown below) | No |
-| **`--out-dir`** | `<correlation_id>.json` (the full result) and `manifest.jsonl` (maps input paths to correlation IDs) | **Yes** |
+| **`--out-dir`** | `<correlation_id>.json` (the full result, including `ocr_content`: the complete OCR text) and `manifest.jsonl` (maps input paths to correlation IDs) | **Yes** |
 
 Example stdout line from an OCR-only run:
 
@@ -159,6 +159,9 @@ Example stdout line from an OCR-only run:
 - On failure, `failed_stage` and `error_code` say what went wrong (see [Error codes](#error-codes)), and
   `retryable: true` means running the same input again may succeed.
 - `medication_count` is `null` when the LLM did not run.
+- `ocr_content` in the result file holds the full OCR text whenever OCR succeeded, including OCR-only
+  (`--no-llm`) runs and runs where the LLM step failed. Use it for manual transcription and review. It
+  is never written to stdout or the logs.
 - Identical inputs in the same run are processed once; repeats are reported as `skipped_duplicate`.
 
 Result files are created with mode `0600` and the directory with `0700`. **On Windows these modes are not
@@ -182,7 +185,7 @@ Exit codes:
   - a `HumanConfirmation` for every flagged field and every medication or allergy field;
   - explicit acknowledgement of every document-level reason code.
 - A schema-valid extraction is never approved for that reason alone. Documents processed without the LLM
-  cannot be approved; they require manual transcription.
+  cannot be approved; they require manual transcription, using `ocr_content` and the source image.
 
 ### Review reason codes
 
@@ -213,10 +216,15 @@ Exit codes:
 
 | Stage | Codes |
 |---|---|
-| Input / preprocessing | `input_unreadable`, `empty_input`, `unsupported_format`, `input_too_large`, `corrupt_or_undecodable_image`, `image_too_small` (shorter side < 50 px), `blank_or_unreadable_page`, `encode_failed` |
-| OCR (Document Intelligence) | `ocr_auth_failed`, `ocr_timeout` ⟳, `ocr_connection_error` ⟳, `ocr_http_<status>` (⟳ for 408, 429, 5xx), `ocr_empty_result`, `ocr_no_text_detected` |
-| LLM (Azure OpenAI) | `llm_endpoint_not_configured`, `llm_deployment_not_configured`, `llm_deployment_not_found`, `llm_auth_failed`, `llm_rate_limited` ⟳, `llm_timeout` ⟳, `llm_connection_error` ⟳, `llm_server_error` ⟳, `llm_http_error`, `empty_document_text`, `document_text_exceeds_limit`, `prompt_content_filtered`, `content_filtered`, `model_refused`, `output_truncated`, `unparsed_response`, `schema_validation_failed` |
+| Input / preprocessing | `input_unreadable`, `empty_input`, `unsupported_format`, `input_too_large`, `corrupt_or_undecodable_image`, `image_too_small` (shorter side < 50 px), `blank_or_unreadable_page`, `corrupt_or_undecodable_pdf`, `pdf_password_protected` (remove the password first), `too_many_pages` (over 2,000, Document Intelligence's limit), `encode_failed` |
+| OCR (Document Intelligence) | `ocr_auth_failed`, `ocr_timeout` ⟳, `ocr_connection_error` ⟳, `ocr_http_<status>` (⟳ for 408, 429, 5xx), `ocr_empty_result`, `ocr_no_text_detected`, `ocr_page_count_mismatch` (the service returned fewer pages than the input has; see below) |
+| LLM (Azure OpenAI) | `llm_endpoint_not_configured`, `llm_deployment_not_configured`, `llm_deployment_not_found`, `llm_auth_failed`, `llm_rate_limited` ⟳, `llm_timeout` ⟳, `llm_connection_error` ⟳, `llm_server_error` ⟳, `llm_bad_request` (a 4xx, e.g. an unsupported parameter such as `temperature`), `llm_http_error`, `empty_document_text`, `document_text_exceeds_limit`, `prompt_content_filtered`, `content_filtered`, `model_refused`, `output_truncated`, `unparsed_response`, `schema_validation_failed` |
 | Any | `internal_error` (an unexpected exception; only its class name is logged) |
+
+**Page coverage check.** The tool counts the input's pages locally and fails the document with
+`ocr_page_count_mismatch` if Document Intelligence returns fewer. The usual cause is the **free (F0) tier,
+which analyses only the first 2 pages** of a PDF or TIFF; use the paid (S0) tier for multi-page documents.
+Partial OCR of a clinical document is never reported as completed.
 
 ## Testing (offline, no credentials)
 
@@ -235,7 +243,7 @@ pyright                                  # src/ and tests/, same checks Pylance 
 - LLM tests drive the real OpenAI SDK through an in-memory HTTP transport.
 - Synthetic-image tests check geometric safety only. **They do not measure clinical OCR accuracy.**
 
-CI (`.github/workflows/ci.yml`) runs ruff, mypy, pytest with at least 85% coverage, and `pip-audit`, on
+CI (`.github/workflows/ci.yml`) runs ruff, mypy, pyright, pytest with at least 85% coverage, and `pip-audit`, on
 Python 3.10 with the lowest allowed dependency versions and on Python 3.13 with `requirements-lock.txt`.
 
 ### Verifying minimum versions
@@ -269,7 +277,7 @@ Use these measurements to calibrate `OCR_CONFIDENCE_THRESHOLD` and choose `PREPR
 
 | Item | Status |
 |---|---|
-| `gpt-chat-latest` deployment: Structured Outputs support | **Verified live on 2026-10-28** (one document, pipeline 0.2.0, prompt `2026-10-28.2`, schema `2.0.0`): the strict schema was accepted, `finish_reason` was `stop` and the response parsed with no schema errors. Configuration used: legacy `AzureOpenAI` client with `api-version` `2024-12-01-preview`; API-key authentication for both Azure OpenAI and Document Intelligence (`ENVIRONMENT=dev`); `LLM_TEMPERATURE` unset, so no temperature was sent. Still to record: the model version behind `gpt-chat-latest` (prompt `2026-10-28.2`, schema `2.0.`0). The v1 GA API surface and Entra ID authentication have **not** been exercised live. "latest" can change underneath you; re-run the smoke test after any model update. |
+| `gpt-chat-latest` deployment: Structured Outputs support | **Verified live on 2026-10-28** (one document, pipeline 0.2.0, prompt `2026-10-28.2`, schema `2.0.0`): the strict schema was accepted, `finish_reason` was `stop` and the response parsed with no schema errors. Configuration used: legacy `AzureOpenAI` client with `api-version` `2024-12-01-preview`; API-key authentication for both Azure OpenAI and Document Intelligence (`ENVIRONMENT=dev`); `LLM_TEMPERATURE` unset, so no temperature was sent. Still to record: the model version behind `gpt-chat-latest` (prompt `2026-10-28.2`, schema `2.0.0`). The v1 GA API surface and Entra ID authentication have **not** been exercised live. "latest" can change underneath you; re-run the smoke test after any model update. |
 | `temperature` and other sampling parameters | **Unverified.** The live run did not exercise an explicit value. Leave `LLM_TEMPERATURE` unset until one is tested. |
 | Document Intelligence live call (`prebuilt-layout`, 1-page JPEG) | **Verified live on 2026-10-28**: OCR completed in about 7 s with word-level confidence scores. |
 | Markdown output for models other than `prebuilt-layout` | Not requested, because it is undocumented for `prebuilt-read`. |
