@@ -30,6 +30,7 @@ dev = [
     "hypothesis>=6.100",
     "ruff>=0.6",
     "mypy>=1.10",
+    "pyright>=1.1.380",
 ]
 
 [project.scripts]
@@ -64,3 +65,10 @@ python_version = "3.10"
 strict = true
 ignore_missing_imports = true
 files = ["src/azure_scanner"]
+
+# Pyright / Pylance: same scope as CI so the editor and the command line agree.
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src"]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
