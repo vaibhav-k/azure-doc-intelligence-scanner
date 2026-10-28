@@ -17,6 +17,7 @@ dependencies = [
     "azure-identity>=1.15.0,<2",
     "openai>=1.106.0,<4",
     "opencv-python-headless>=4.9.0.80,<6",
+    "pypdfium2>=4.30.0,<6",
     "numpy>=1.26.0,<3",
     "pydantic>=2.7.0,<3",
     "pydantic-settings>=2.3.0,<3",

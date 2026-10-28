@@ -253,7 +253,7 @@ class LlmExtractor:
             raise LlmTransientError("llm_connection_error") from exc
         if isinstance(exc, openai.RateLimitError):
             raise LlmRateLimitError("llm_rate_limited", detail="429") from exc
-        if isinstance(exc, (openai.AuthenticationError, openai.PermissionDeniedError)):
+        if isinstance(exc, openai.AuthenticationError | openai.PermissionDeniedError):
             raise LlmAuthError("llm_auth_failed", detail=str(_status_code(exc))) from exc
         if isinstance(exc, openai.NotFoundError):
             raise LlmConfigurationError("llm_deployment_not_found", detail="404") from exc

@@ -29,11 +29,11 @@ T0 = datetime(2026, 10, 28, tzinfo=timezone.utc)
 
 
 def _route(
-    extraction: ClinicalDocumentExtraction,
-    text=CLEAN_TEXT,
-    confidences=None,
-    llm_enabled=True,
-) -> ReviewRecord:  # type: ignore[no-untyped-def]
+    extraction: ClinicalDocumentExtraction | None,
+    text: str = CLEAN_TEXT,
+    confidences: dict[str, float | None] | None = None,
+    llm_enabled: bool = True,
+) -> ReviewRecord:
     ocr = evaluate_ocr_confidence(ocr_result_from_text(text, confidences))
     return route_for_review(
         new_record("c1"),

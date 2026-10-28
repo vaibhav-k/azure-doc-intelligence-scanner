@@ -42,6 +42,3 @@ manifest.jsonl
 # OS specific files
 .DS_Store
 Thumbs.db
-
-# Dependency lock files
-requirements-lock.txt

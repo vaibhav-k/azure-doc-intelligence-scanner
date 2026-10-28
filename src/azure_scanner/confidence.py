@@ -92,7 +92,7 @@ def _item(word: OcrWord, flag: OcrFlag, confidence: float | None) -> ReviewItem:
 
 
 def validate_threshold(threshold: float) -> float:
-    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0.0 < threshold <= 1.0:
+    if isinstance(threshold, bool) or not isinstance(threshold, int | float) or not 0.0 < threshold <= 1.0:
         raise ValueError("ocr confidence threshold must be a number in (0, 1]")
     return float(threshold)
 
@@ -100,7 +100,7 @@ def validate_threshold(threshold: float) -> float:
 def _read_confidence(raw: Any) -> tuple[float | None, OcrFlag | None]:
     if raw is None:
         return None, OcrFlag.MISSING_CONFIDENCE
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+    if isinstance(raw, bool) or not isinstance(raw, int | float):
         return None, OcrFlag.INVALID_CONFIDENCE
     value = float(raw)
     if math.isnan(value) or value < 0.0 or value > 1.0:
