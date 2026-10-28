@@ -41,7 +41,10 @@ from tests.conftest import PHI_SENTINELS
 
 # Use exactly the HTTP library the installed SDK uses: ``httpx`` in openai 1.x/2.x,
 # ``httpx2`` (same API) in openai 3.x.
-httpx: Any = getattr(openai._base_client, "httpx2", None) or openai._base_client.httpx
+# Resolved at runtime, so request/response types are annotated as ``Any`` (``Handler``).
+httpx: Any = getattr(openai._base_client, "httpx2", None) or getattr(openai._base_client, "httpx")  # noqa: B009
+
+Handler = Callable[[Any], Any]
 
 VALID_JSON = empty_extraction().model_dump_json()
 
@@ -71,16 +74,16 @@ def _completion(content: str | None, finish: str = "stop", refusal: str | None =
 
 
 class Recorder:
-    def __init__(self, responses: list[Callable[[httpx.Request], httpx.Response]]) -> None:
+    def __init__(self, responses: list[Handler]) -> None:
         self.responses = responses
-        self.requests: list[httpx.Request] = []
+        self.requests: list[Any] = []
 
-    def __call__(self, request: httpx.Request) -> httpx.Response:
+    def __call__(self, request: Any) -> Any:
         self.requests.append(request)
         return self.responses[min(len(self.requests) - 1, len(self.responses) - 1)](request)
 
 
-def ok(content: str | None = VALID_JSON, **kw: Any) -> Callable[[httpx.Request], httpx.Response]:
+def ok(content: str | None = VALID_JSON, **kw: Any) -> Handler:
     return lambda r: httpx.Response(200, json=_completion(content, **kw))
 
 
@@ -91,7 +94,7 @@ def status(code: int, headers: dict[str, str] | None = None, body: dict[str, Any
 @pytest.fixture
 def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     sleeps: list[float] = []
-    monkeypatch.setattr(openai._base_client.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr("openai._base_client.time.sleep", lambda s: sleeps.append(s))
     return sleeps
 
 
@@ -199,7 +202,7 @@ def test_sdk_prompt_content_filter(no_sleep: list[float]) -> None:
 
 
 def test_sdk_timeout_retried_then_typed(no_sleep: list[float]) -> None:
-    def timeout(request: httpx.Request) -> httpx.Response:
+    def timeout(request: Any) -> Any:
         raise httpx.ReadTimeout("timed out", request=request)
 
     rec = Recorder([timeout])
@@ -209,7 +212,7 @@ def test_sdk_timeout_retried_then_typed(no_sleep: list[float]) -> None:
 
 
 def test_sdk_connection_error(no_sleep: list[float]) -> None:
-    def boom(request: httpx.Request) -> httpx.Response:
+    def boom(request: Any) -> Any:
         raise httpx.ConnectError("refused", request=request)
 
     with pytest.raises(LlmTransientError, match="llm_connection_error"):

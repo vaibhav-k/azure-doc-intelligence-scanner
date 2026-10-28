@@ -1,10 +1,13 @@
-"""Geometric-safety and input-validation tests for preprocessing.
+"""
+Geometric-safety and input-validation tests for preprocessing.
 
 These use synthetic images only. Passing them shows the code does not damage page geometry;
 it does NOT establish clinical OCR accuracy, which requires a de-identified evaluation set.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -33,7 +36,9 @@ def _gray(img: np.ndarray) -> np.ndarray:
 
 
 def _decode(b: bytes) -> np.ndarray:
-    return cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_UNCHANGED)
+    img = cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_UNCHANGED)
+    assert img is not None, "image failed to decode"
+    return np.asarray(img)
 
 
 # ---------- input validation ----------
@@ -140,13 +145,15 @@ def test_deskew_estimates_small_skews_on_portrait_and_landscape(width: int, heig
     img = rotate_same_canvas(synthetic_page(width, height), skew)
     result = estimate_skew(_gray(img))
     assert result.applied
-    assert result.angle is not None and abs(result.angle + skew) <= 0.5
+    assert result.angle is not None
+    assert abs(result.angle + skew) <= 0.5
 
 
 def test_straight_page_is_not_rotated() -> None:
     img = synthetic_page()
     result = estimate_skew(_gray(img))
-    assert not result.applied and result.reason == "below_minimum"
+    assert not result.applied
+    assert result.reason == "below_minimum"
     assert deskew_image(img) is img
 
 
@@ -155,7 +162,8 @@ def test_dark_border_does_not_cause_wrong_rotation(skew: float) -> None:
     img = rotate_same_canvas(synthetic_page(dark_border=True), skew)
     result = estimate_skew(_gray(img))
     if result.applied:
-        assert result.angle is not None and abs(result.angle + skew) <= 0.5
+        assert result.angle is not None
+        assert abs(result.angle + skew) <= 0.5
     else:
         assert skew == 0
 
@@ -163,7 +171,8 @@ def test_dark_border_does_not_cause_wrong_rotation(skew: float) -> None:
 def test_skew_beyond_bound_is_refused_not_forced() -> None:
     img = rotate_same_canvas(synthetic_page(), 15)
     result = estimate_skew(_gray(img))
-    assert not result.applied and result.reason == "out_of_range"
+    assert not result.applied
+    assert result.reason == "out_of_range"
     assert deskew_image(img) is img
 
 
@@ -192,7 +201,8 @@ def test_rotate_expand_never_crops(width: int, height: int, angle: float) -> Non
     img[:12, :] = img[-12:, :] = img[:, :12] = img[:, -12:] = 0
     dark_before = int((img < 128).sum())
     out = rotate_expand(img, angle)
-    assert out.shape[0] >= height and out.shape[1] >= width
+    assert out.shape[0] >= height
+    assert out.shape[1] >= width
     dark_after = int((out < 128).sum())
     assert dark_after >= 0.97 * dark_before  # interpolation tolerance only; no cropped edges
 
@@ -203,7 +213,8 @@ def test_property_enhanced_mode_never_large_rotation_or_crop(skew: float) -> Non
     src = rotate_same_canvas(synthetic_page(), skew)
     out = preprocess_bytes(encode(src), PreprocessMode.ENHANCED)
     decoded = _decode(out.payload)
-    assert decoded.shape[0] >= src.shape[0] and decoded.shape[1] >= src.shape[1]
+    assert decoded.shape[0] >= src.shape[0]
+    assert decoded.shape[1] >= src.shape[1]
     assert out.deskew is not None
     if out.deskew.applied:
         assert abs(out.deskew.angle or 0) <= MAX_DESKEW_DEGREES
@@ -244,6 +255,6 @@ def test_path_wrapper_reads_file(tmp_path, page_png: bytes) -> None:  # type: ig
     assert preprocess_image(str(p))[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_path_wrapper_missing_file(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_path_wrapper_missing_file(tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     with pytest.raises(FileNotFoundError):
         preprocess_image(str(tmp_path / "missing.png"))

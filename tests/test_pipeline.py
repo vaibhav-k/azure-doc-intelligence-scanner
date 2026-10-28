@@ -1,4 +1,5 @@
-"""End-to-end pipeline tests, fully offline.
+"""
+End-to-end pipeline tests, fully offline.
 
 Real ``DocumentScannerService`` + mocked Document Intelligence client; real ``LlmExtractor``
 + real OpenAI SDK over an in-memory transport. Only network I/O is faked.
@@ -75,7 +76,7 @@ def _pipeline(
 
 @pytest.fixture(autouse=True)
 def _no_sdk_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(openai._base_client.time, "sleep", lambda s: None)
+    monkeypatch.setattr("openai._base_client.time.sleep", lambda s: None)
 
 
 # ------------------------------------------------------------------ success path
@@ -87,11 +88,16 @@ def test_happy_path_runs_all_stages_in_order_and_needs_review(page_png: bytes) -
     assert result.processing_status is ProcessingStatus.COMPLETED
     assert result.stages_completed == STAGES
     assert result.review.status is ReviewStatus.NEEDS_REVIEW  # never auto-approved
-    assert result.extraction is not None and result.extraction.medications[0].drug_name.verbatim == "Drug-X"
-    assert result.error_code is None and result.failed_stage is None
-    assert result.llm.prompt_tokens == 120 and result.ocr is not None and result.ocr.page_count == 1
+    assert result.extraction is not None
+    assert result.extraction.medications[0].drug_name.verbatim == "Drug-X"
+    assert result.error_code is None
+    assert result.failed_stage is None
+    assert result.llm.prompt_tokens == 120
+    assert result.ocr is not None
+    assert result.ocr.page_count == 1
     assert di.begin_analyze_document.call_args.kwargs["body"].bytes_source == page_png
-    assert len(result.source_sha256) == 64 and result.created_at == FIXED
+    assert len(result.source_sha256) == 64
+    assert result.created_at == FIXED
 
 
 def test_low_confidence_ocr_spans_reach_the_llm_marked(page_png: bytes) -> None:
@@ -99,8 +105,10 @@ def test_low_confidence_ocr_spans_reach_the_llm_marked(page_png: bytes) -> None:
     pipe, _ = _pipeline(ocr_result_from_text(CLEAN_TEXT, {"2": 0.4, "BID": None}), rec)
     result = pipe.process(page_png)
     sent = json.loads(rec.requests[0].content)["messages"][1]["content"]
-    assert f"{LOW_CONF_OPEN}2]]" in sent and f"{LOW_CONF_OPEN}BID]]" in sent
-    assert result.review.priority is not None and result.review.priority.value == "priority"
+    assert f"{LOW_CONF_OPEN}2]]" in sent
+    assert f"{LOW_CONF_OPEN}BID]]" in sent
+    assert result.review.priority is not None
+    assert result.review.priority.value == "priority"
     assert {i.flag for i in result.ocr_review_items} == {
         "low_confidence",
         "missing_confidence",
@@ -113,7 +121,8 @@ def test_llm_disabled_completes_with_manual_transcription_required(
     pipe, _ = _pipeline(llm=False)
     result = pipe.process(page_png)
     assert result.processing_status is ProcessingStatus.COMPLETED
-    assert result.extraction is None and "llm_extraction" not in result.stages_completed
+    assert result.extraction is None
+    assert "llm_extraction" not in result.stages_completed
     assert "llm_disabled_manual_transcription_required" in result.review.reasons
 
 
@@ -146,7 +155,8 @@ def test_ocr_transport_failure_fails_and_skips_llm(page_png: bytes) -> None:
     pipe, _ = _pipeline(recorder=rec, di_error=ServiceRequestError(message="dns"))
     result = pipe.process(page_png)
     _assert_failed(result, "ocr", "ocr_connection_error")
-    assert result.retryable and rec.requests == []
+    assert result.retryable
+    assert rec.requests == []
 
 
 def test_ocr_timeout_is_failed_not_completed(page_png: bytes) -> None:

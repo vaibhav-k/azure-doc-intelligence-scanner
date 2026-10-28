@@ -1,4 +1,5 @@
-"""Vendor-neutral EMR integration contract (read-only first).
+"""
+Vendor-neutral EMR integration contract (read-only first).
 
 This module defines *interfaces and safety checks only*. It contains no vendor endpoints,
 SDK calls or credentials. A concrete adapter (e.g. for Accuro) may be written only after the
@@ -128,7 +129,10 @@ class EmrDocumentSource(Protocol):
 class ResultSink(Protocol):
     """Delivery of clinician-approved results. Must be idempotent on ``idempotency_key``."""
 
-    capabilities: Mapping[EmrCapability, CapabilityStatus]
+    @property
+    def capabilities(self) -> Mapping[EmrCapability, CapabilityStatus]:
+        """Read-only view, so implementations may expose any mapping type (e.g. ``dict``)."""
+        ...
 
     def deliver(
         self,

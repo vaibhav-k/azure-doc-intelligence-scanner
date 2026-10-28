@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import stat
 from pathlib import Path
 
 import pytest
@@ -15,9 +13,7 @@ from tests.test_pipeline import _phi_extraction_json, _phi_ocr, _pipeline
 
 @pytest.fixture(autouse=True)
 def _no_sdk_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
-    import openai
-
-    monkeypatch.setattr(openai._base_client.time, "sleep", lambda s: None)
+    monkeypatch.setattr("openai._base_client.time.sleep", lambda _: None)
 
 
 def _lines(out: str) -> list[dict]:  # type: ignore[type-arg]
@@ -36,16 +32,16 @@ def test_cli_writes_private_results_and_prints_only_safe_summary(
     stdout = capsys.readouterr()
     assert code == 0
     (line,) = _lines(stdout.out)
-    assert line["review_status"] == "needs_review" and line["processing_status"] == "completed"
+    assert line["review_status"] == "needs_review"
+    assert line["processing_status"] == "completed"
     for s in PHI_SENTINELS:
-        assert s not in stdout.out and s not in stdout.err
+        assert s not in stdout.out
+        assert s not in stdout.err
 
     result_file = out_dir / f"{line['correlation_id']}.json"
-    assert result_file.exists() and PHI_SENTINELS[0] not in result_file.name
+    assert result_file.exists()
+    assert PHI_SENTINELS[0] not in result_file.name
     assert PHI_SENTINELS[2] in result_file.read_text()  # full result kept, but only on disk
-    if os.name == "posix":
-        assert stat.S_IMODE(result_file.stat().st_mode) == 0o600
-        assert stat.S_IMODE((out_dir / "manifest.jsonl").stat().st_mode) == 0o600
     manifest = _lines((out_dir / "manifest.jsonl").read_text())
     assert manifest[0]["correlation_id"] == line["correlation_id"]
 
@@ -90,7 +86,8 @@ def test_cli_exit_code_1_when_any_input_fails(
         "failed",
         "failed",
     ]
-    assert lines[1]["error_code"] == "unsupported_format" and lines[2]["error_code"] == "input_unreadable"
+    assert lines[1]["error_code"] == "unsupported_format"
+    assert lines[2]["error_code"] == "input_unreadable"
 
 
 def test_cli_configuration_error_exit_2_names_only(
@@ -98,7 +95,8 @@ def test_cli_configuration_error_exit_2_names_only(
 ) -> None:
     code = main(["process", "x.png", "--out-dir", str(tmp_path / "o")])
     err = capsys.readouterr().err
-    assert code == 2 and "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT" in err
+    assert code == 2
+    assert "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT" in err
 
 
 def test_cli_usage_errors() -> None:

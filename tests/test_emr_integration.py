@@ -6,7 +6,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-import openai
 import pytest
 
 from azure_scanner.integrations.accuro import (
@@ -34,6 +33,7 @@ from azure_scanner.models import HumanConfirmation
 from azure_scanner.pipeline import ProcessingStatus
 from azure_scanner.review import (
     ReviewPolicy,
+    ReviewRecord,
     ReviewStatus,
     approve,
     required_confirmation_paths,
@@ -47,7 +47,7 @@ REF = SourceDocumentRef("fake-emr", patient_id=PHI_SENTINELS[0], document_id="do
 
 @pytest.fixture(autouse=True)
 def _no_sdk_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(openai._base_client.time, "sleep", lambda s: None)
+    monkeypatch.setattr("openai._base_client.time.sleep", lambda _: None)
 
 
 @dataclass
@@ -56,7 +56,7 @@ class FakeSource:
     system_name: str = "fake-emr"
     error: EmrError | None = None
     override_ref: SourceDocumentRef | None = None
-    calls: list[SourceDocumentRef] = field(default_factory=list)
+    calls: list[SourceDocumentRef] = field(default_factory=list[SourceDocumentRef])
 
     def fetch(self, ref: SourceDocumentRef) -> SourceDocument:
         self.calls.append(ref)
@@ -68,9 +68,9 @@ class FakeSource:
 @dataclass
 class RecordingSink:
     capabilities: dict[EmrCapability, CapabilityStatus]
-    delivered: list[str] = field(default_factory=list)
+    delivered: list[str] = field(default_factory=list[str])
 
-    def deliver(self, ref, result, record, idempotency_key):  # type: ignore[no-untyped-def]
+    def deliver(self, ref, result, record, idempotency_key: str):  # type: ignore[no-untyped-def]
         if idempotency_key in self.delivered:
             return DeliveryReceipt(idempotency_key, accepted=False)
         self.delivered.append(idempotency_key)
@@ -81,7 +81,7 @@ VERIFIED_SINK = {EmrCapability.WRITE_REVIEWED_RESULT: CapabilityStatus.VERIFIED}
 
 
 def _approved(outcome):  # type: ignore[no-untyped-def]
-    record = outcome.result.review
+    record: ReviewRecord = outcome.result.review
     confirmations = [
         HumanConfirmation(path=p, confirmed_value="ok", reviewer_id="dr-1", confirmed_at=T0)
         for p in required_confirmation_paths(record, ReviewPolicy())
@@ -103,8 +103,10 @@ def test_fakes_satisfy_protocols(page_png: bytes) -> None:
 def test_successful_read_only_processing_keeps_reference(page_png: bytes) -> None:
     source = FakeSource(page_png)
     outcome = process_emr_document(source, REF, _pipeline()[0], correlation_id="c1")
-    assert outcome.result is not None and outcome.result.processing_status is ProcessingStatus.COMPLETED
-    assert outcome.ref is REF and source.calls == [REF]
+    assert outcome.result is not None
+    assert outcome.result.processing_status is ProcessingStatus.COMPLETED
+    assert outcome.ref is REF
+    assert source.calls == [REF]
     assert outcome.result.review.status is ReviewStatus.NEEDS_REVIEW
 
 
@@ -121,7 +123,9 @@ def test_fetch_failures_are_reported_without_processing(
 ) -> None:
     pipe, di = _pipeline()
     outcome = process_emr_document(FakeSource(page_png, error=error), REF, pipe)
-    assert outcome.result is None and outcome.error_code == error.code and outcome.retryable is retryable
+    assert outcome.result is None
+    assert outcome.error_code == error.code
+    assert outcome.retryable is retryable
     di.begin_analyze_document.assert_not_called()
 
 
@@ -139,12 +143,14 @@ def test_cross_patient_or_stale_document_is_never_processed(
 ) -> None:
     pipe, di = _pipeline()
     outcome = process_emr_document(FakeSource(page_png, override_ref=other), REF, pipe)
-    assert outcome.result is None and outcome.error_code == "fetched_document_does_not_match_reference"
+    assert outcome.result is None
+    assert outcome.error_code == "fetched_document_does_not_match_reference"
     di.begin_analyze_document.assert_not_called()
 
 
 def test_source_system_mismatch(page_png: bytes) -> None:
     outcome = process_emr_document(FakeSource(page_png, system_name="other"), REF, _pipeline()[0])
+    assert outcome.result is None
     assert outcome.error_code == "source_system_mismatch"
 
 
@@ -181,7 +187,8 @@ def test_review_record_from_another_document_is_rejected(page_png: bytes) -> Non
 
 def test_failed_processing_is_never_written(page_png: bytes) -> None:
     outcome = process_emr_document(FakeSource(b"garbage"), REF, _pipeline()[0])
-    assert outcome.result is not None and outcome.result.processing_status is ProcessingStatus.FAILED
+    assert outcome.result is not None
+    assert outcome.result.processing_status is ProcessingStatus.FAILED
     with pytest.raises(WriteBackNotAuthorizedError, match="no_completed_result"):
         deliver_if_approved(RecordingSink(VERIFIED_SINK), outcome, outcome.result.review)
 
@@ -191,7 +198,9 @@ def test_verified_sink_and_approval_deliver_once_idempotently(page_png: bytes) -
     sink, record = RecordingSink(VERIFIED_SINK), _approved(outcome)
     first = deliver_if_approved(sink, outcome, record)
     second = deliver_if_approved(sink, outcome, record)
-    assert first.accepted and not second.accepted and len(sink.delivered) == 1
+    assert first.accepted
+    assert not second.accepted
+    assert len(sink.delivered) == 1
     assert first.idempotency_key.startswith("fake-emr:doc-001:")
 
 
@@ -204,7 +213,8 @@ def test_identifiers_never_logged(page_png: bytes, caplog: pytest.LogCaptureFixt
     )
     process_emr_document(FakeSource(page_png), REF, _pipeline()[0])
     logged = " ".join(r.getMessage() + repr(getattr(r, "safe_fields", "")) for r in caplog.records)
-    assert PHI_SENTINELS[0] not in logged and "doc-001" not in logged
+    assert PHI_SENTINELS[0] not in logged
+    assert "doc-001" not in logged
     assert PHI_SENTINELS[0] not in repr(REF)
 
 
