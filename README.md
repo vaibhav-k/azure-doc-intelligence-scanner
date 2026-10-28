@@ -200,6 +200,7 @@ Exit codes:
 | `ocr_confidence_unknown` | field | Some words behind this field have no confidence score. |
 | `model_reported_warnings` | document | The model reported reading problems of its own. |
 | `allergy_uncertain` | document | An allergy entry is ambiguous, illegible or has no reading. |
+| `extracted_despite_low_ocr_confidence` | field | The model marked the value as clearly written (`extracted`), but OCR scored the text behind it below the threshold. A confident value on weak evidence: **check these first**. Always `priority`; it cannot be configured as routine. |
 | `ambiguous`, `illegible` | field | The model marked the value as uncertain. |
 | `not_found_in_source` | field | The model's verbatim text does not appear in the OCR text (possible hallucination). |
 | `normalization_changed_numbers` | field | The normalized value has different numbers from the verbatim reading. |

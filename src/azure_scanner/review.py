@@ -82,6 +82,17 @@ class ReviewPolicy:
     # listed here. Empty by default; add codes only with clinical sign-off.
     routine_reasons: frozenset[str] = field(default_factory=frozenset[str])
 
+    def __post_init__(self) -> None:
+        blocked = self.routine_reasons & NEVER_ROUTINE_REASONS
+        if blocked:
+            raise ValueError(f"these reasons must always escalate: {sorted(blocked)}")
+
+
+# The model claimed a clear reading of text the OCR engine was unsure about: a confident value with
+# weak evidence is the most dangerous failure mode, so it can never be configured as routine.
+EXTRACTED_DESPITE_LOW_OCR = "extracted_despite_low_ocr_confidence"
+NEVER_ROUTINE_REASONS: frozenset[str] = frozenset({EXTRACTED_DESPITE_LOW_OCR})
+
 
 _TRAILING_ZERO = re.compile(r"\b\d+\.0+\b")  # "5.0 mg" can be misread as 50 mg
 _NAKED_DECIMAL = re.compile(r"(?<![\d.])\.\d")  # ".5 mg" can be misread as 5 mg
@@ -132,6 +143,8 @@ def _check_source_and_confidence(
     min_conf = min(known) if known else None
     if min_conf is not None and min_conf < policy.ocr_confidence_threshold:
         reasons.append("ocr_low_confidence")
+        if value.status is FieldStatus.EXTRACTED:
+            reasons.append(EXTRACTED_DESPITE_LOW_OCR)
 
     return found, min_conf
 

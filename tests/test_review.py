@@ -108,6 +108,41 @@ def test_low_ocr_confidence_on_a_dose_is_flagged_on_that_field() -> None:
     assert record.priority is ReviewPriority.PRIORITY
 
 
+def test_extracted_value_over_low_confidence_ocr_gets_its_own_reason() -> None:
+    record = _route(doc(medications=[clean_med()]), confidences={"2": 0.31})
+    strength = next(a for a in record.field_assessments if a.path == "medications[0].strength")
+    assert strength.status.value == "extracted"
+    assert "extracted_despite_low_ocr_confidence" in strength.review_reasons
+    assert "extracted_despite_low_ocr_confidence" in record.reasons
+    assert "medications[0].strength" in required_confirmation_paths(record, POLICY)
+
+
+def test_ambiguous_value_over_low_confidence_ocr_is_not_overconfident() -> None:
+    m = med(
+        drug_name="Drug-X",
+        strength=fld("2 mg", status="ambiguous", alternatives=["7 mg"]),
+    )
+    record = _route(doc(medications=[m]), confidences={"2": 0.31})
+    strength = next(a for a in record.field_assessments if a.path == "medications[0].strength")
+    assert "ocr_low_confidence" in strength.review_reasons
+    assert "extracted_despite_low_ocr_confidence" not in strength.review_reasons
+
+
+def test_extracted_value_over_confident_or_unscored_ocr_is_not_overconfident() -> None:
+    cases: list[dict[str, float | None]] = [
+        {},
+        {"2": None},
+    ]  # high (default) and unscored
+    for confidences in cases:
+        record = _route(doc(medications=[clean_med()]), confidences=confidences)
+        assert "extracted_despite_low_ocr_confidence" not in record.reasons
+
+
+def test_overconfident_extraction_cannot_be_configured_as_routine() -> None:
+    with pytest.raises(ValueError, match="must always escalate"):
+        ReviewPolicy(routine_reasons=frozenset({"extracted_despite_low_ocr_confidence"}))
+
+
 def test_unknown_ocr_confidence_is_not_treated_as_high() -> None:
     record = _route(doc(medications=[clean_med()]), confidences={"BID": None})
     freq = next(a for a in record.field_assessments if a.path == "medications[0].frequency")
