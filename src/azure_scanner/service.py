@@ -141,7 +141,9 @@ class DocumentScannerService:
         return result
 
     def analyze_bytes(self, data: bytes, *, correlation_id: str) -> Any:
-        return self.run_ocr(self.prepare(data, correlation_id=correlation_id).payload, correlation_id=correlation_id)
+        return self.run_ocr(
+            self.prepare(data, correlation_id=correlation_id).payload, correlation_id=correlation_id
+        )
 
     def analyze_document(self, file_path: str, *, correlation_id: str = "local") -> Any:
         """Backward-compatible path-based API. Raises FileNotFoundError for a missing file."""

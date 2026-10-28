@@ -74,9 +74,13 @@ VERIFIED_SINK = {EmrCapability.WRITE_REVIEWED_RESULT: CapabilityStatus.VERIFIED}
 
 def _approved(outcome):  # type: ignore[no-untyped-def]
     record = outcome.result.review
-    confirmations = [HumanConfirmation(path=p, confirmed_value="ok", reviewer_id="dr-1", confirmed_at=T0)
-                     for p in required_confirmation_paths(record, ReviewPolicy())]
-    return approve(record, reviewer_id="dr-1", confirmations=confirmations, acknowledged_reasons=record.reasons)
+    confirmations = [
+        HumanConfirmation(path=p, confirmed_value="ok", reviewer_id="dr-1", confirmed_at=T0)
+        for p in required_confirmation_paths(record, ReviewPolicy())
+    ]
+    return approve(
+        record, reviewer_id="dr-1", confirmations=confirmations, acknowledged_reasons=record.reasons
+    )
 
 
 def test_fakes_satisfy_protocols(page_png: bytes) -> None:
@@ -95,10 +99,15 @@ def test_successful_read_only_processing_keeps_reference(page_png: bytes) -> Non
 
 @pytest.mark.parametrize(
     "error, retryable",
-    [(EmrAuthError("emr_auth_failed"), False), (EmrNotFoundError("emr_document_not_found"), False),
-     (EmrUnavailableError("emr_unavailable"), True)],
+    [
+        (EmrAuthError("emr_auth_failed"), False),
+        (EmrNotFoundError("emr_document_not_found"), False),
+        (EmrUnavailableError("emr_unavailable"), True),
+    ],
 )
-def test_fetch_failures_are_reported_without_processing(page_png: bytes, error: EmrError, retryable: bool) -> None:
+def test_fetch_failures_are_reported_without_processing(
+    page_png: bytes, error: EmrError, retryable: bool
+) -> None:
     pipe, di = _pipeline()
     outcome = process_emr_document(FakeSource(page_png, error=error), REF, pipe)
     assert outcome.result is None and outcome.error_code == error.code and outcome.retryable is retryable
@@ -107,12 +116,16 @@ def test_fetch_failures_are_reported_without_processing(page_png: bytes, error: 
 
 @pytest.mark.parametrize(
     "other",
-    [SourceDocumentRef("fake-emr", "another-patient", "doc-001", "v1"),
-     SourceDocumentRef("fake-emr", PHI_SENTINELS[0], "doc-999", "v1"),
-     SourceDocumentRef("fake-emr", PHI_SENTINELS[0], "doc-001", "v2")],
+    [
+        SourceDocumentRef("fake-emr", "another-patient", "doc-001", "v1"),
+        SourceDocumentRef("fake-emr", PHI_SENTINELS[0], "doc-999", "v1"),
+        SourceDocumentRef("fake-emr", PHI_SENTINELS[0], "doc-001", "v2"),
+    ],
     ids=["wrong-patient", "wrong-document", "stale-version"],
 )
-def test_cross_patient_or_stale_document_is_never_processed(page_png: bytes, other: SourceDocumentRef) -> None:
+def test_cross_patient_or_stale_document_is_never_processed(
+    page_png: bytes, other: SourceDocumentRef
+) -> None:
     pipe, di = _pipeline()
     outcome = process_emr_document(FakeSource(page_png, override_ref=other), REF, pipe)
     assert outcome.result is None and outcome.error_code == "fetched_document_does_not_match_reference"
@@ -173,7 +186,9 @@ def test_verified_sink_and_approval_deliver_once_idempotently(page_png: bytes) -
 
 def test_identifiers_never_logged(page_png: bytes, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.DEBUG)
-    process_emr_document(FakeSource(page_png, error=EmrNotFoundError("emr_document_not_found")), REF, _pipeline()[0])
+    process_emr_document(
+        FakeSource(page_png, error=EmrNotFoundError("emr_document_not_found")), REF, _pipeline()[0]
+    )
     process_emr_document(FakeSource(page_png), REF, _pipeline()[0])
     logged = " ".join(r.getMessage() + repr(getattr(r, "safe_fields", "")) for r in caplog.records)
     assert PHI_SENTINELS[0] not in logged and "doc-001" not in logged

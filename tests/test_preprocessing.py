@@ -38,6 +38,7 @@ def _decode(b: bytes) -> np.ndarray:
 
 # ---------- input validation ----------
 
+
 @pytest.mark.parametrize(
     "data, code",
     [
@@ -108,6 +109,7 @@ def test_pdf_is_passed_through_untouched_even_in_enhanced_mode() -> None:
 
 # ---------- default (minimal) mode preserves the original ----------
 
+
 @pytest.mark.parametrize("ext", [".png", ".jpg"])
 def test_minimal_mode_forwards_original_bytes(ext: str) -> None:
     data = encode(synthetic_page(), ext)
@@ -127,6 +129,7 @@ def test_huge_image_is_downscaled_not_rejected() -> None:
 
 
 # ---------- deskew safety (regression for the original 90-degree rotate/crop defect) ----------
+
 
 @pytest.mark.parametrize("width, height", [(850, 1100), (1400, 800)], ids=["portrait", "landscape"])
 @pytest.mark.parametrize("skew", [-8, -3, 2, 6])
@@ -206,6 +209,7 @@ def test_property_enhanced_mode_never_large_rotation_or_crop(skew: float) -> Non
 
 
 # ---------- enhanced mode preserves small clinically meaningful marks ----------
+
 
 def _count_small_blobs(gray: np.ndarray) -> int:
     _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)

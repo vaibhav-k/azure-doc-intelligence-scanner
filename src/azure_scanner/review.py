@@ -29,7 +29,6 @@ from azure_scanner.confidence import OcrConfidenceReport, OcrFlag, words_in_span
 from azure_scanner.errors import PipelineError
 from azure_scanner.logging_utils import log_event
 from azure_scanner.models import (
-    MEDICATION_FIELDS,
     ClinicalDocumentExtraction,
     ExtractedField,
     FieldAssessment,
@@ -247,7 +246,9 @@ def new_record(correlation_id: str) -> ReviewRecord:
 
 
 def mark_failed(record: ReviewRecord, error_code: str) -> ReviewRecord:
-    return _transition(record, ReviewStatus.FAILED, actor_type="system", actor_id="pipeline", event_reasons=(error_code,))
+    return _transition(
+        record, ReviewStatus.FAILED, actor_type="system", actor_id="pipeline", event_reasons=(error_code,)
+    )
 
 
 def route_for_review(
@@ -278,7 +279,9 @@ def route_for_review(
 
     all_reasons = list(dict.fromkeys(doc_reasons + [r for a in assessments for r in a.review_reasons]))
     priority = (
-        ReviewPriority.PRIORITY if any(r in policy.priority_reasons for r in all_reasons) else ReviewPriority.ROUTINE
+        ReviewPriority.PRIORITY
+        if any(r in policy.priority_reasons for r in all_reasons)
+        else ReviewPriority.ROUTINE
     )
     reasons = tuple(sorted(set(all_reasons)))
     return _transition(
@@ -296,7 +299,10 @@ def route_for_review(
 def required_confirmation_paths(record: ReviewRecord, policy: ReviewPolicy) -> set[str]:
     paths = set(record.flagged_paths())
     for a in record.field_assessments:
-        if a.path.startswith(policy.mandatory_confirmation_prefixes) and a.status is not FieldStatus.NOT_PRESENT:
+        if (
+            a.path.startswith(policy.mandatory_confirmation_prefixes)
+            and a.status is not FieldStatus.NOT_PRESENT
+        ):
             paths.add(a.path)
     return paths
 
@@ -321,7 +327,10 @@ def approve(
         raise ReviewTransitionError("reviewer_required")
     if record.status is not ReviewStatus.NEEDS_REVIEW:
         raise ReviewTransitionError(f"illegal_transition_{record.status.value}_to_approved")
-    if "llm_disabled_manual_transcription_required" in record.reasons or "extraction_unavailable" in record.reasons:
+    if (
+        "llm_disabled_manual_transcription_required" in record.reasons
+        or "extraction_unavailable" in record.reasons
+    ):
         raise ReviewTransitionError("nothing_to_approve_manual_transcription_required")
     confirmations = tuple(confirmations)
     if any(c.reviewer_id != reviewer_id for c in confirmations):
@@ -343,7 +352,9 @@ def approve(
     )
 
 
-def reject(record: ReviewRecord, *, reviewer_id: str, reason_code: str, at: datetime | None = None) -> ReviewRecord:
+def reject(
+    record: ReviewRecord, *, reviewer_id: str, reason_code: str, at: datetime | None = None
+) -> ReviewRecord:
     if not reviewer_id:
         raise ReviewTransitionError("reviewer_required")
     if not re.fullmatch(r"[a-z0-9_]{1,64}", reason_code):

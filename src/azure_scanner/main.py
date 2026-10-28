@@ -66,7 +66,9 @@ def build_pipeline(settings: Settings, *, use_llm: bool) -> DocumentPipeline:
 
 
 def _parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="azure-scanner", description=__doc__.splitlines()[0] if __doc__ else None)
+    p = argparse.ArgumentParser(
+        prog="azure-scanner", description=__doc__.splitlines()[0] if __doc__ else None
+    )
     sub = p.add_subparsers(dest="command", required=True)
     proc = sub.add_parser("process", help="process one or more documents")
     proc.add_argument("inputs", nargs="+", type=Path)
@@ -104,9 +106,17 @@ def main(argv: list[str] | None = None, *, pipeline: DocumentPipeline | None = N
             data = path.read_bytes()
         except OSError:
             any_failed = True
-            log_event(logger, logging.ERROR, "input_unreadable", correlation_id=cid, error_code="input_unreadable")
-            _emit({"index": index, "correlation_id": cid, "processing_status": "failed",
-                              "error_code": "input_unreadable"})
+            log_event(
+                logger, logging.ERROR, "input_unreadable", correlation_id=cid, error_code="input_unreadable"
+            )
+            _emit(
+                {
+                    "index": index,
+                    "correlation_id": cid,
+                    "processing_status": "failed",
+                    "error_code": "input_unreadable",
+                }
+            )
             continue
         digest = sha256_hex(data)
         if digest in seen:
@@ -116,8 +126,12 @@ def main(argv: list[str] | None = None, *, pipeline: DocumentPipeline | None = N
 
         result = pipeline.process(data, correlation_id=cid)
         _write_private(out_dir / f"{cid}.json", result.model_dump_json(indent=2))
-        _append_private(manifest, json.dumps({"index": index, "input_path": str(path), "correlation_id": cid,
-                                              "source_sha256": digest}))
+        _append_private(
+            manifest,
+            json.dumps(
+                {"index": index, "input_path": str(path), "correlation_id": cid, "source_sha256": digest}
+            ),
+        )
         any_failed |= result.processing_status is ProcessingStatus.FAILED
         _emit({"index": index, **result.safe_summary()})
 

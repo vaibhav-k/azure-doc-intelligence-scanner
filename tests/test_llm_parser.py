@@ -17,10 +17,6 @@ from typing import Any
 import openai
 import pytest
 
-# Use exactly the HTTP library the installed SDK uses: ``httpx`` in openai 1.x/2.x,
-# ``httpx2`` (same API) in openai 3.x.
-httpx: Any = getattr(openai._base_client, "httpx2", None) or openai._base_client.httpx
-
 from azure_scanner.config import Settings
 from azure_scanner.llm_parser import (
     LOW_CONF_OPEN,
@@ -42,6 +38,10 @@ from azure_scanner.llm_parser import (
 )
 from azure_scanner.models import empty_extraction
 from tests.conftest import PHI_SENTINELS
+
+# Use exactly the HTTP library the installed SDK uses: ``httpx`` in openai 1.x/2.x,
+# ``httpx2`` (same API) in openai 3.x.
+httpx: Any = getattr(openai._base_client, "httpx2", None) or openai._base_client.httpx
 
 VALID_JSON = empty_extraction().model_dump_json()
 
@@ -91,7 +91,9 @@ def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     return sleeps
 
 
-def _sdk_extractor(recorder: Recorder, max_retries: int = 2, temperature: float | None = None) -> LlmExtractor:
+def _sdk_extractor(
+    recorder: Recorder, max_retries: int = 2, temperature: float | None = None
+) -> LlmExtractor:
     client = openai.OpenAI(
         base_url="https://unit-test.invalid/openai/v1/",
         api_key="test",
@@ -147,7 +149,9 @@ def test_sdk_5xx_retried_then_mapped(no_sleep: list[float], code: int, err: type
     "code, err, detail",
     [(401, LlmAuthError, "401"), (403, LlmAuthError, "403"), (404, LlmConfigurationError, "404")],
 )
-def test_sdk_non_retryable_errors_are_not_retried(no_sleep: list[float], code: int, err: type, detail: str) -> None:
+def test_sdk_non_retryable_errors_are_not_retried(
+    no_sleep: list[float], code: int, err: type, detail: str
+) -> None:
     rec = Recorder([status(code)])
     with pytest.raises(err) as exc:
         _sdk_extractor(rec, max_retries=3).extract("Rx", correlation_id="c")
@@ -156,8 +160,14 @@ def test_sdk_non_retryable_errors_are_not_retried(no_sleep: list[float], code: i
 
 
 def test_sdk_unsupported_parameter_is_actionable_and_not_retried(no_sleep: list[float]) -> None:
-    body = {"error": {"message": f"echo {PHI_SENTINELS[2]}", "type": "invalid_request_error",
-                      "param": "temperature", "code": "unsupported_value"}}
+    body = {
+        "error": {
+            "message": f"echo {PHI_SENTINELS[2]}",
+            "type": "invalid_request_error",
+            "param": "temperature",
+            "code": "unsupported_value",
+        }
+    }
     rec = Recorder([status(400, body=body)])
     with pytest.raises(LlmRequestError) as exc:
         _sdk_extractor(rec, temperature=0.0).extract("Rx", correlation_id="c")
@@ -192,7 +202,9 @@ def test_sdk_connection_error(no_sleep: list[float]) -> None:
 
 def test_sdk_refusal(no_sleep: list[float]) -> None:
     with pytest.raises(LlmRefusalError):
-        _sdk_extractor(Recorder([ok(None, refusal="I can't help with that")])).extract("Rx", correlation_id="c")
+        _sdk_extractor(Recorder([ok(None, refusal="I can't help with that")])).extract(
+            "Rx", correlation_id="c"
+        )
 
 
 def test_sdk_truncated_output(no_sleep: list[float]) -> None:
@@ -210,8 +222,17 @@ def test_sdk_content_filter_finish(no_sleep: list[float]) -> None:
     [
         '{"not": "the schema"}',
         VALID_JSON.replace('"not_present"', '"inferred"', 1),  # status outside the enum
-        json.dumps({**json.loads(VALID_JSON), "patient_name": {"verbatim": "x", "normalized": None,
-                                                                "status": "not_present", "alternatives": []}}),
+        json.dumps(
+            {
+                **json.loads(VALID_JSON),
+                "patient_name": {
+                    "verbatim": "x",
+                    "normalized": None,
+                    "status": "not_present",
+                    "alternatives": [],
+                },
+            }
+        ),
         "this is not json",
     ],
     ids=["wrong-shape", "bad-enum", "violates-validator", "not-json"],
@@ -297,7 +318,10 @@ def test_annotate_low_confidence_spans() -> None:
     content = "Take 0.5 mg bid"
     assert annotate_low_confidence(content, [(5, 3)]) == f"Take {LOW_CONF_OPEN}0.5]] mg bid"
     # overlapping spans merge; out-of-range and empty spans are ignored
-    assert annotate_low_confidence(content, [(5, 3), (7, 4), (99, 2), (0, 0)]) == f"Take {LOW_CONF_OPEN}0.5 mg]] bid"
+    assert (
+        annotate_low_confidence(content, [(5, 3), (7, 4), (99, 2), (0, 0)])
+        == f"Take {LOW_CONF_OPEN}0.5 mg]] bid"
+    )
 
 
 def test_success_log_contains_metadata_only(caplog: pytest.LogCaptureFixture) -> None:

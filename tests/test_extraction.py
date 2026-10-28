@@ -84,8 +84,14 @@ def test_medical_prescription_empty_and_optional() -> None:
 # v2 schema: uncertainty preservation, validation, serialization, Structured Outputs compatibility
 # ---------------------------------------------------------------------------------------------
 
+
 def _f(verbatim=None, status="not_present", normalized=None, alternatives=None):  # type: ignore[no-untyped-def]
-    return {"verbatim": verbatim, "normalized": normalized, "status": status, "alternatives": alternatives or []}
+    return {
+        "verbatim": verbatim,
+        "normalized": normalized,
+        "status": status,
+        "alternatives": alternatives or [],
+    }
 
 
 @pytest.mark.parametrize(
@@ -162,7 +168,11 @@ def test_extra_top_level_keys_rejected() -> None:
 
 
 def test_iter_fields_paths() -> None:
-    doc = empty_extraction(medications=[MedicationExtraction(**{n: ExtractedField.absent() for n in MedicationExtraction.model_fields})])
+    doc = empty_extraction(
+        medications=[
+            MedicationExtraction(**{n: ExtractedField.absent() for n in MedicationExtraction.model_fields})
+        ]
+    )
     paths = [p for p, _ in doc.iter_fields()]
     assert "medications[0].dose" in paths and "patient_name" in paths and len(paths) == 6 + 9
 
@@ -181,10 +191,27 @@ def _walk(node, depth=0):  # type: ignore[no-untyped-def]
 
 
 UNSUPPORTED_KEYWORDS = (
-    "minLength", "maxLength", "pattern", "format", "minimum", "maximum", "multipleOf",
-    "patternProperties", "unevaluatedProperties", "propertyNames", "minProperties", "maxProperties",
-    "unevaluatedItems", "contains", "minContains", "maxContains", "minItems", "maxItems", "uniqueItems",
-    "examples", "default",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "format",
+    "minimum",
+    "maximum",
+    "multipleOf",
+    "patternProperties",
+    "unevaluatedProperties",
+    "propertyNames",
+    "minProperties",
+    "maxProperties",
+    "unevaluatedItems",
+    "contains",
+    "minContains",
+    "maxContains",
+    "minItems",
+    "maxItems",
+    "uniqueItems",
+    "examples",
+    "default",
 )
 
 

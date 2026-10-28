@@ -48,7 +48,9 @@ class _StrictModel(BaseModel):
 class ExtractedField(_StrictModel):
     """One transcribed value. ``normalized`` never replaces ``verbatim``."""
 
-    verbatim: str | None = Field(description="Characters exactly as written, abbreviations kept; null if none.")
+    verbatim: str | None = Field(
+        description="Characters exactly as written, abbreviations kept; null if none."
+    )
     normalized: str | None = Field(
         description="Standard form only when unambiguous from the verbatim text; otherwise null."
     )
@@ -137,7 +139,13 @@ class ClinicalDocumentExtraction(_StrictModel):
     def iter_fields(self) -> list[tuple[str, ExtractedField]]:
         """All fields with stable dotted paths, e.g. ``medications[0].dose``."""
         out: list[tuple[str, ExtractedField]] = []
-        for name in ("document_type", "patient_name", "patient_dob_or_age", "document_date", "clinician_name"):
+        for name in (
+            "document_type",
+            "patient_name",
+            "patient_dob_or_age",
+            "document_date",
+            "clinician_name",
+        ):
             out.append((name, getattr(self, name)))
         out += [(f"allergies[{i}]", f) for i, f in enumerate(self.allergies)]
         out += [(f"assessment_or_diagnoses[{i}]", f) for i, f in enumerate(self.assessment_or_diagnoses)]

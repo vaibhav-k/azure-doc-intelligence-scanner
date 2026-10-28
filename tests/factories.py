@@ -13,11 +13,19 @@ from azure_scanner.models import (
 )
 
 
-def fld(verbatim: str | None = None, status: str | None = None, normalized: str | None = None,
-        alternatives: list[str] | None = None) -> ExtractedField:
+def fld(
+    verbatim: str | None = None,
+    status: str | None = None,
+    normalized: str | None = None,
+    alternatives: list[str] | None = None,
+) -> ExtractedField:
     status = status or ("extracted" if verbatim else "not_present")
-    return ExtractedField(verbatim=verbatim, normalized=normalized, status=status,  # type: ignore[arg-type]
-                          alternatives=alternatives or [])
+    return ExtractedField(
+        verbatim=verbatim,
+        normalized=normalized,
+        status=status,  # type: ignore[arg-type]
+        alternatives=alternatives or [],
+    )
 
 
 def med(**fields: ExtractedField | str) -> MedicationExtraction:

@@ -125,7 +125,11 @@ class ProcessingResult(BaseModel):
             if self.error_code is not None or self.review.status is not ReviewStatus.NEEDS_REVIEW:
                 raise ValueError("completed_result_must_need_review_and_have_no_error")
         else:
-            if not self.error_code or self.review.status is not ReviewStatus.FAILED or self.extraction is not None:
+            if (
+                not self.error_code
+                or self.review.status is not ReviewStatus.FAILED
+                or self.extraction is not None
+            ):
                 raise ValueError("failed_result_must_have_error_no_extraction_and_failed_review")
         return self
 
@@ -210,7 +214,9 @@ class DocumentPipeline:
                 "transformations": list(prepared.transformations),
                 "warnings": list(prepared.warnings),
                 "deskew_reason": prepared.deskew.reason if prepared.deskew else None,
-                "deskew_angle": prepared.deskew.angle if prepared.deskew and prepared.deskew.applied else None,
+                "deskew_angle": prepared.deskew.angle
+                if prepared.deskew and prepared.deskew.applied
+                else None,
             }
             done.append("preprocessing")  # preparation covers validation + preprocessing
 
@@ -231,18 +237,19 @@ class DocumentPipeline:
                 flag_counts=report.flag_counts(),
             )
             state["ocr_review_items"] = tuple(
-                OcrReviewItemOut(page=i.page, flag=i.flag.value, confidence=i.confidence, text=i.content,
-                                 polygon=i.polygon)
+                OcrReviewItemOut(
+                    page=i.page, flag=i.flag.value, confidence=i.confidence, text=i.content, polygon=i.polygon
+                )
                 for i in report.review_items
             )
             if not content.strip() or report.flags & {OcrFlag.NO_PAGES}:
                 raise OcrError("ocr_no_text_detected")
 
             extraction: ClinicalDocumentExtraction | None = None
-            if self.extractor is not None:
+            extractor = self.extractor
+            if extractor is not None:
                 annotated = annotate_low_confidence(content, _uncertain_spans(report))
-                outcome = timed("llm_extraction", lambda: self.extractor.extract(annotated, correlation_id=cid))  # type: ignore[union-attr]
-                extraction = outcome.extraction
+                outcome = timed("llm_extraction", lambda: extractor.extract(annotated, correlation_id=cid))
                 state["llm"] = LlmSummary(
                     enabled=True,
                     model=outcome.model,
@@ -250,10 +257,11 @@ class DocumentPipeline:
                     prompt_tokens=outcome.prompt_tokens,
                     completion_tokens=outcome.completion_tokens,
                 )
+                parsed = outcome.extraction
                 # Re-validate defensively: the object must satisfy the schema and its validators.
                 extraction = timed(
                     "validation",
-                    lambda: ClinicalDocumentExtraction.model_validate(extraction.model_dump()),  # type: ignore[union-attr]
+                    lambda: ClinicalDocumentExtraction.model_validate(parsed.model_dump()),
                 )
 
             record = timed(
@@ -276,17 +284,31 @@ class DocumentPipeline:
                 timings_ms=timings,
             )
         except PipelineError as exc:
-            final = self._failed(state, record, done, timings, getattr(exc, "stage", None) or stage, exc.code,
-                                 exc.retryable)
+            final = self._failed(
+                state, record, done, timings, getattr(exc, "stage", None) or stage, exc.code, exc.retryable
+            )
         except Exception as exc:  # noqa: BLE001 - boundary: unexpected bugs become a coded failure, never success
-            log_event(logger, logging.ERROR, "pipeline_internal_error", correlation_id=cid, stage=stage,
-                      error_type=type(exc).__name__)
+            log_event(
+                logger,
+                logging.ERROR,
+                "pipeline_internal_error",
+                correlation_id=cid,
+                stage=stage,
+                error_type=type(exc).__name__,
+            )
             final = self._failed(state, record, done, timings, stage, "internal_error", False)
 
-        log_event(logger, logging.INFO, "document_processed", correlation_id=cid,
-                  processing_status=final.processing_status.value, review_status=final.review.status.value,
-                  reason_count=len(final.review.reasons), error_code=final.error_code,
-                  pipeline_version=__version__)
+        log_event(
+            logger,
+            logging.INFO,
+            "document_processed",
+            correlation_id=cid,
+            processing_status=final.processing_status.value,
+            review_status=final.review.status.value,
+            reason_count=len(final.review.reasons),
+            error_code=final.error_code,
+            pipeline_version=__version__,
+        )
         return final
 
     @staticmethod

@@ -69,7 +69,9 @@ def test_unfinished_poller_is_a_timeout_not_a_result(page_png: bytes) -> None:
         (ServiceRequestError(message="dns"), "ocr_connection_error", True),
     ],
 )
-def test_sdk_errors_map_to_coded_errors(page_png: bytes, error: Exception, code: str, retryable: bool) -> None:
+def test_sdk_errors_map_to_coded_errors(
+    page_png: bytes, error: Exception, code: str, retryable: bool
+) -> None:
     client = MagicMock()
     client.begin_analyze_document.side_effect = error
     with pytest.raises(OcrError) as exc:
@@ -112,7 +114,9 @@ def test_constructor_validates_timeout() -> None:
         DocumentScannerService(MagicMock(), timeout_seconds=0)
 
 
-def test_logs_contain_no_paths_or_sdk_messages(page_png: bytes, tmp_path, caplog: pytest.LogCaptureFixture) -> None:  # type: ignore[no-untyped-def]
+def test_logs_contain_no_paths_or_sdk_messages(
+    page_png: bytes, tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:  # type: ignore[no-untyped-def]
     caplog.set_level(logging.DEBUG)
     path = tmp_path / f"{PHI_SENTINELS[0]}_scan.png"
     path.write_bytes(page_png)

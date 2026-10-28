@@ -136,7 +136,8 @@ def _drop_edge_artifacts(mask: np.ndarray) -> np.ndarray:
         large = area > 0.005 * h * w or bw > 0.5 * w or bh > 0.5 * h
         if touches and large:
             keep[i] = False
-    return keep[labels].astype(np.uint8)
+    out: np.ndarray = keep[labels].astype(np.uint8)
+    return out
 
 
 def _profile_score(mask: np.ndarray, angle: float) -> float:
@@ -163,10 +164,10 @@ def estimate_skew(gray: np.ndarray, max_degrees: float = MAX_DESKEW_DEGREES) -> 
     search = max_degrees + 2.0  # search slightly wider so a boundary optimum is detectable
     coarse = np.arange(-search, search + 1e-9, 0.5)
     scores = np.array([_profile_score(mask, a) for a in coarse])
-    best = float(coarse[int(scores.argmax())])
+    best = float(coarse[int(np.argmax(scores))])
     fine = np.arange(best - 0.5, best + 0.5 + 1e-9, 0.1)
     fine_scores = np.array([_profile_score(mask, a) for a in fine])
-    best = round(float(fine[int(fine_scores.argmax())]), 1)
+    best = round(float(fine[int(np.argmax(fine_scores))]), 1)
     best_score = float(fine_scores.max())
     zero_score = _profile_score(mask, 0.0)
 

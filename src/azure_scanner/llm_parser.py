@@ -128,7 +128,10 @@ def build_openai_client(settings: Settings) -> openai.OpenAI:
     endpoint = settings.azure_openai_endpoint
     if not endpoint:
         raise LlmConfigurationError("llm_endpoint_not_configured")
-    common: dict[str, Any] = {"max_retries": settings.llm_max_retries, "timeout": settings.llm_timeout_seconds}
+    common: dict[str, Any] = {
+        "max_retries": settings.llm_max_retries,
+        "timeout": settings.llm_timeout_seconds,
+    }
     key = settings.azure_openai_api_key.get_secret_value() if settings.azure_openai_api_key else None
 
     if settings.azure_openai_api_version:
@@ -267,7 +270,9 @@ class LlmExtractor:
             if getattr(exc, "code", None) == "content_filter":
                 raise LlmContentFilterError("prompt_content_filtered") from exc
             param = getattr(exc, "param", None)  # a parameter NAME (e.g. "temperature"), never content
-            raise LlmRequestError("llm_bad_request", detail=param if isinstance(param, str) else None) from exc
+            raise LlmRequestError(
+                "llm_bad_request", detail=param if isinstance(param, str) else None
+            ) from exc
         except openai.InternalServerError as exc:
             raise LlmTransientError("llm_server_error", detail=str(_status_code(exc))) from exc
         except openai.APIStatusError as exc:

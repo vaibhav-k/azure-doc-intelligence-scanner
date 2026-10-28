@@ -130,8 +130,9 @@ class ResultSink(Protocol):
 
     capabilities: Mapping[EmrCapability, CapabilityStatus]
 
-    def deliver(self, ref: SourceDocumentRef, result: ProcessingResult, record: ReviewRecord,
-                idempotency_key: str) -> DeliveryReceipt: ...
+    def deliver(
+        self, ref: SourceDocumentRef, result: ProcessingResult, record: ReviewRecord, idempotency_key: str
+    ) -> DeliveryReceipt: ...
 
 
 class DisabledResultSink:
@@ -141,8 +142,9 @@ class DisabledResultSink:
         EmrCapability.WRITE_REVIEWED_RESULT: CapabilityStatus.UNVERIFIED
     }
 
-    def deliver(self, ref: SourceDocumentRef, result: ProcessingResult, record: ReviewRecord,
-                idempotency_key: str) -> DeliveryReceipt:
+    def deliver(
+        self, ref: SourceDocumentRef, result: ProcessingResult, record: ReviewRecord, idempotency_key: str
+    ) -> DeliveryReceipt:
         raise WriteBackNotAuthorizedError("write_back_not_verified")
 
 
@@ -150,9 +152,11 @@ class DisabledResultSink:
 
 
 def _same_document(a: SourceDocumentRef, b: SourceDocumentRef) -> bool:
-    return (a.source_system, a.patient_id, a.document_id) == (b.source_system, b.patient_id, b.document_id) and (
-        a.version is None or a.version == b.version
-    )
+    return (a.source_system, a.patient_id, a.document_id) == (
+        b.source_system,
+        b.patient_id,
+        b.document_id,
+    ) and (a.version is None or a.version == b.version)
 
 
 def process_emr_document(
@@ -171,8 +175,15 @@ def process_emr_document(
         if not _same_document(document.ref, ref):
             raise EmrAssociationError("fetched_document_does_not_match_reference")
     except EmrError as exc:
-        log_event(logger, logging.WARNING, "emr_fetch_failed", correlation_id=cid, stage="emr",
-                  error_code=exc.code, retryable=exc.retryable)
+        log_event(
+            logger,
+            logging.WARNING,
+            "emr_fetch_failed",
+            correlation_id=cid,
+            stage="emr",
+            error_code=exc.code,
+            retryable=exc.retryable,
+        )
         return EmrProcessingOutcome(ref, cid, None, exc.code, exc.retryable)
 
     result = pipeline.process(document.content, correlation_id=cid)
@@ -199,6 +210,12 @@ def deliver_if_approved(
     if record.status is not ReviewStatus.APPROVED:
         raise WriteBackNotAuthorizedError("not_clinician_approved")
     receipt = sink.deliver(outcome.ref, result, record, idempotency_key(outcome.ref, result))
-    log_event(logger, logging.INFO, "result_delivered", correlation_id=result.correlation_id, stage="emr",
-              status="accepted" if receipt.accepted else "not_accepted")
+    log_event(
+        logger,
+        logging.INFO,
+        "result_delivered",
+        correlation_id=result.correlation_id,
+        stage="emr",
+        status="accepted" if receipt.accepted else "not_accepted",
+    )
     return receipt

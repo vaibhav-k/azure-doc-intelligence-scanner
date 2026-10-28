@@ -11,8 +11,15 @@ from tests.conftest import PHI_SENTINELS
 
 def test_disallowed_fields_are_dropped(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
-    log_event(logging.getLogger("t"), logging.INFO, "evt", correlation_id="c", patient_name=PHI_SENTINELS[0],
-              ocr_text=PHI_SENTINELS[2], file_path=f"/scans/{PHI_SENTINELS[0]}.jpg")
+    log_event(
+        logging.getLogger("t"),
+        logging.INFO,
+        "evt",
+        correlation_id="c",
+        patient_name=PHI_SENTINELS[0],
+        ocr_text=PHI_SENTINELS[2],
+        file_path=f"/scans/{PHI_SENTINELS[0]}.jpg",
+    )
     record = caplog.records[-1]
     assert record.safe_fields == {"correlation_id": "c", "dropped_fields": 3}  # type: ignore[attr-defined]
     rendered = SafeJsonFormatter().format(record)

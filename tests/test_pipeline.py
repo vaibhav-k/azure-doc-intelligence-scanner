@@ -40,16 +40,28 @@ def _di_client(result: Any = None, error: Exception | None = None) -> MagicMock:
 
 
 def _extractor(recorder: Recorder) -> LlmExtractor:
-    client = openai.OpenAI(base_url="https://unit-test.invalid/openai/v1/", api_key="t", max_retries=0,
-                           http_client=httpx.Client(transport=httpx.MockTransport(recorder)))
+    client = openai.OpenAI(
+        base_url="https://unit-test.invalid/openai/v1/",
+        api_key="t",
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(recorder)),
+    )
     return LlmExtractor(client, "test-deployment")
 
 
-def _pipeline(ocr_result: Any = None, recorder: Recorder | None = None, di_error: Exception | None = None,
-              llm: bool = True) -> tuple[DocumentPipeline, MagicMock]:
+def _pipeline(
+    ocr_result: Any = None,
+    recorder: Recorder | None = None,
+    di_error: Exception | None = None,
+    llm: bool = True,
+) -> tuple[DocumentPipeline, MagicMock]:
     di = _di_client(ocr_result if ocr_result is not None else ocr_result_from_text(CLEAN_TEXT), di_error)
     scanner = DocumentScannerService(di, "prebuilt-layout", timeout_seconds=5)
-    extractor = _extractor(recorder or Recorder([ok(doc(medications=[clean_med()]).model_dump_json())])) if llm else None
+    extractor = (
+        _extractor(recorder or Recorder([ok(doc(medications=[clean_med()]).model_dump_json())]))
+        if llm
+        else None
+    )
     return DocumentPipeline(scanner, extractor, clock=lambda: FIXED), di
 
 
@@ -166,37 +178,51 @@ def test_unexpected_bug_becomes_coded_failure(page_png: bytes) -> None:
 
 def test_result_invariants_cannot_be_bypassed() -> None:
     base: dict[str, Any] = {
-        "pipeline_version": "x", "correlation_id": "c", "source_sha256": "0" * 64, "created_at": FIXED,
-        "stages_completed": (), "llm": {"enabled": False}, "timings_ms": {},
+        "pipeline_version": "x",
+        "correlation_id": "c",
+        "source_sha256": "0" * 64,
+        "created_at": FIXED,
+        "stages_completed": (),
+        "llm": {"enabled": False},
+        "timings_ms": {},
     }
     with pytest.raises(ValidationError, match="completed_result_must"):
         ProcessingResult(**base, processing_status=ProcessingStatus.COMPLETED, review=new_record("c"))
     with pytest.raises(ValidationError, match="failed_result_must"):
-        ProcessingResult(**base, processing_status=ProcessingStatus.FAILED, error_code="x",
-                         review=new_record("c"), extraction=ClinicalDocumentExtraction.model_validate(
-                             json.loads(doc().model_dump_json())))
+        ProcessingResult(
+            **base,
+            processing_status=ProcessingStatus.FAILED,
+            error_code="x",
+            review=new_record("c"),
+            extraction=ClinicalDocumentExtraction.model_validate(json.loads(doc().model_dump_json())),
+        )
 
 
 # ------------------------------------------------------------------ privacy
 
 
 def _phi_ocr() -> Any:
-    return ocr_result_from_text(f"Patient {PHI_SENTINELS[0]} DOB {PHI_SENTINELS[1]} Rx {PHI_SENTINELS[2]} 2 mg BID",
-                                {PHI_SENTINELS[2]: 0.3})
+    return ocr_result_from_text(
+        f"Patient {PHI_SENTINELS[0]} DOB {PHI_SENTINELS[1]} Rx {PHI_SENTINELS[2]} 2 mg BID",
+        {PHI_SENTINELS[2]: 0.3},
+    )
 
 
 def _phi_extraction_json() -> str:
     m = clean_med().model_copy(update={"drug_name": fld(PHI_SENTINELS[2])})
-    return doc(patient_name=fld(PHI_SENTINELS[0]), patient_dob_or_age=fld(PHI_SENTINELS[1]),
-               medications=[m]).model_dump_json()
+    return doc(
+        patient_name=fld(PHI_SENTINELS[0]), patient_dob_or_age=fld(PHI_SENTINELS[1]), medications=[m]
+    ).model_dump_json()
 
 
 @pytest.mark.parametrize(
-    "response", [ok(_phi_extraction_json()), ok("{bad json " + PHI_SENTINELS[0]), status(500)],
+    "response",
+    [ok(_phi_extraction_json()), ok("{bad json " + PHI_SENTINELS[0]), status(500)],
     ids=["success", "schema-failure", "server-error"],
 )
-def test_logs_and_safe_summary_never_contain_phi(page_png: bytes, caplog: pytest.LogCaptureFixture,
-                                                 response: Any) -> None:
+def test_logs_and_safe_summary_never_contain_phi(
+    page_png: bytes, caplog: pytest.LogCaptureFixture, response: Any
+) -> None:
     caplog.set_level(logging.DEBUG)
     pipe, _ = _pipeline(_phi_ocr(), Recorder([response]))
     result = pipe.process(page_png)

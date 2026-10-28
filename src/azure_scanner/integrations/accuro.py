@@ -27,11 +27,11 @@ ACCURO_CAPABILITIES: dict[EmrCapability, CapabilityStatus] = {
 VENDOR_VERIFICATION_REQUIRED: tuple[str, ...] = (
     "API/partner programme enrolment, licensing, and sandbox access with synthetic patients",
     "Supported OAuth2 grant types, scopes, token lifetime, office/tenant scoping, IP/mTLS requirements",
-    "How new or updated patient documents are discovered (polling cursor, webhook, change feed) and guarantees",
+    "How new or updated documents are discovered (polling cursor, webhook, change feed) and guarantees",
     "Document content download contract (binary endpoint, media types, size limits, pagination)",
     "Minimum metadata available per document (patient ID, document ID, version/etag, upload time)",
     "Behaviour of document and patient IDs on patient merge / relink / document move or deletion",
     "Rate limits, fair-use policy and operational SLAs",
-    "Whether any write-back is supported (review status, notes, structured medications) and required approvals",
+    "Whether write-back is supported (review status, notes, structured medications) and approvals needed",
     "Vendor and contractual position on sending document content to Azure AI services",
 )

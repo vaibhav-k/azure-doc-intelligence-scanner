@@ -78,6 +78,18 @@ class OcrConfidenceReport:
         return counts
 
 
+def _item(word: OcrWord, flag: OcrFlag, confidence: float | None) -> ReviewItem:
+    return ReviewItem(
+        page=word.page,
+        flag=flag,
+        confidence=confidence,
+        content=word.content,
+        span_offset=word.span_offset,
+        span_length=word.span_length,
+        polygon=word.polygon,
+    )
+
+
 def validate_threshold(threshold: float) -> float:
     if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0.0 < threshold <= 1.0:
         raise ValueError("ocr confidence threshold must be a number in (0, 1]")
@@ -138,20 +150,13 @@ def evaluate_ocr_confidence(
                 polygon=tuple(float(p) for p in poly) if poly else None,
             )
             words_out.append(ocr_word)
-            common = {
-                "page": page_no,
-                "content": content,
-                "span_offset": ocr_word.span_offset,
-                "span_length": ocr_word.span_length,
-                "polygon": ocr_word.polygon,
-            }
             if problem is not None:
-                items.append(ReviewItem(flag=problem, confidence=None, **common))
+                items.append(_item(ocr_word, problem, None))
                 continue
             assert value is not None
             scores.append(value)
             if value < threshold:
-                items.append(ReviewItem(flag=OcrFlag.LOW_CONFIDENCE, confidence=round(value, 4), **common))
+                items.append(_item(ocr_word, OcrFlag.LOW_CONFIDENCE, round(value, 4)))
 
     return OcrConfidenceReport(
         threshold=threshold,

@@ -30,13 +30,16 @@ T0 = datetime(2026, 10, 28, tzinfo=timezone.utc)
 
 def _route(extraction, text=CLEAN_TEXT, confidences=None, llm_enabled=True) -> ReviewRecord:  # type: ignore[no-untyped-def]
     ocr = evaluate_ocr_confidence(ocr_result_from_text(text, confidences))
-    return route_for_review(new_record("c1"), ocr=ocr, content=text, extraction=extraction, policy=POLICY,
-                            llm_enabled=llm_enabled)
+    return route_for_review(
+        new_record("c1"), ocr=ocr, content=text, extraction=extraction, policy=POLICY, llm_enabled=llm_enabled
+    )
 
 
 def _confirm(record: ReviewRecord, reviewer: str = "dr-reviewer-01") -> list[HumanConfirmation]:
-    return [HumanConfirmation(path=p, confirmed_value="ok", reviewer_id=reviewer, confirmed_at=T0)
-            for p in required_confirmation_paths(record, POLICY)]
+    return [
+        HumanConfirmation(path=p, confirmed_value="ok", reviewer_id=reviewer, confirmed_at=T0)
+        for p in required_confirmation_paths(record, POLICY)
+    ]
 
 
 # ---------------------------------------------------------------- routing never approves
@@ -110,8 +113,10 @@ def test_error_prone_decimal_notation_flagged(text: str) -> None:
 
 
 def test_contradictory_entries_for_same_drug_flagged() -> None:
-    record = _route(doc(medications=[clean_med(), clean_med().model_copy(update={"strength": fld("20 mg")})]),
-                    text=CLEAN_TEXT + " Drug-X 20 mg")
+    record = _route(
+        doc(medications=[clean_med(), clean_med().model_copy(update={"strength": fld("20 mg")})]),
+        text=CLEAN_TEXT + " Drug-X 20 mg",
+    )
     assert "contradictory_medication_entries" in record.reasons
 
 
@@ -153,8 +158,13 @@ def test_approval_requires_confirmation_of_every_consequential_field() -> None:
     assert {"medications[0].drug_name", "medications[0].strength", "medications[0].frequency"} <= required
     with pytest.raises(ReviewTransitionError, match="unconfirmed_fields"):
         approve(record, reviewer_id="dr-reviewer-01", confirmations=_confirm(record)[:-1])
-    approved = approve(record, reviewer_id="dr-reviewer-01", confirmations=_confirm(record),
-                       acknowledged_reasons=record.reasons, at=T0)
+    approved = approve(
+        record,
+        reviewer_id="dr-reviewer-01",
+        confirmations=_confirm(record),
+        acknowledged_reasons=record.reasons,
+        at=T0,
+    )
     assert approved.status is ReviewStatus.APPROVED
     assert approved.events[-1].actor_type == "clinician" and approved.events[-1].actor_id == "dr-reviewer-01"
     assert record.status is ReviewStatus.NEEDS_REVIEW  # records are immutable
@@ -162,12 +172,18 @@ def test_approval_requires_confirmation_of_every_consequential_field() -> None:
 
 def test_document_level_reasons_must_be_acknowledged() -> None:
     # Low-confidence OCR text that maps to no extracted field (e.g. an omitted medication line).
-    record = _route(doc(medications=[clean_med()]), text=CLEAN_TEXT + " Drug-Z 40 mg", confidences={"Drug-Z": 0.3})
+    record = _route(
+        doc(medications=[clean_med()]), text=CLEAN_TEXT + " Drug-Z 40 mg", confidences={"Drug-Z": 0.3}
+    )
     assert "ocr_low_confidence" in record.reasons
     with pytest.raises(ReviewTransitionError, match="unacknowledged_reasons"):
         approve(record, reviewer_id="dr-reviewer-01", confirmations=_confirm(record))
-    ok = approve(record, reviewer_id="dr-reviewer-01", confirmations=_confirm(record),
-                 acknowledged_reasons=record.reasons)
+    ok = approve(
+        record,
+        reviewer_id="dr-reviewer-01",
+        confirmations=_confirm(record),
+        acknowledged_reasons=record.reasons,
+    )
     assert ok.status is ReviewStatus.APPROVED
     assert set(ok.events[-1].reason_codes) == set(record.reasons)
 
@@ -190,8 +206,11 @@ def test_only_needs_review_can_be_approved(start: str) -> None:
         rec = mark_failed(rec, "ocr_timeout")
     elif start in ("approved", "rejected"):
         rec = _route(doc())
-        rec = approve(rec, reviewer_id="d", confirmations=[]) if start == "approved" else reject(
-            rec, reviewer_id="d", reason_code="illegible_source")
+        rec = (
+            approve(rec, reviewer_id="d", confirmations=[])
+            if start == "approved"
+            else reject(rec, reviewer_id="d", reason_code="illegible_source")
+        )
     with pytest.raises(ReviewTransitionError):
         approve(rec, reviewer_id="d", confirmations=[])
 
@@ -211,11 +230,15 @@ def test_reject_requires_code_not_free_text() -> None:
 def test_status_changes_are_recorded_and_logged_without_phi(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
     m = clean_med().model_copy(update={"drug_name": fld(PHI_SENTINELS[2])})
-    record = _route(doc(patient_name=fld(PHI_SENTINELS[0]), medications=[m]),
-                    text=f"{PHI_SENTINELS[0]} {CLEAN_TEXT} {PHI_SENTINELS[2]}")
+    record = _route(
+        doc(patient_name=fld(PHI_SENTINELS[0]), medications=[m]),
+        text=f"{PHI_SENTINELS[0]} {CLEAN_TEXT} {PHI_SENTINELS[2]}",
+    )
     record = reject(record, reviewer_id="dr-reviewer-01", reason_code="wrong_patient", at=T0)
     assert [(e.from_status.value, e.to_status.value) for e in record.events] == [
-        ("pending", "needs_review"), ("needs_review", "rejected")]
+        ("pending", "needs_review"),
+        ("needs_review", "rejected"),
+    ]
     logged = " ".join(r.getMessage() + repr(getattr(r, "safe_fields", "")) for r in caplog.records)
     assert "review_status_changed" in logged
     assert all(s not in logged for s in PHI_SENTINELS) and "dr-reviewer-01" not in logged
