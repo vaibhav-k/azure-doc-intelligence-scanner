@@ -34,9 +34,9 @@ def main() -> None:
         print(
             f"\nEvaluating word-level confidence scores (Threshold: {confidence_threshold})..."
         )
-        _, review_queue = evaluate_ocr_confidence(
+        review_queue = evaluate_ocr_confidence(
             result, threshold=confidence_threshold
-        )
+        ).review_items
 
         if review_queue:
             print(
@@ -44,7 +44,7 @@ def main() -> None:
             )
             for item in review_queue:
                 print(
-                    f"  - Page {item['page']} | Token: '{item['token']}' | Confidence: {item['confidence']}"
+                    f"  - Page {item.page} | Flag: {item.flag.value} | Confidence: {item.confidence}"
                 )
         else:
             print("\n✅ All extracted tokens met the high-confidence threshold.")
