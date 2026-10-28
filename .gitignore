@@ -2,16 +2,43 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+build/
+dist/
 .venv/
 venv/
 ENV/
 
-# Local configuration & environment variables
+# Tool caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local configuration & secrets
 .env
+.env.*
+!.env.example
+
+# Clinical documents and results: NEVER commit (may contain PHI).
+# Synthetic test images are generated in code (tests/conftest.py), not stored.
+inputs/
+outputs/
+results/
+*.jpg
+*.jpeg
+*.png
+*.tif
+*.tiff
+*.bmp
+*.heic
+*.heif
+*.pdf
+manifest.jsonl
 
 # OS specific files
 .DS_Store
 Thumbs.db
-
-# ruff cache
-.ruff_cache/
