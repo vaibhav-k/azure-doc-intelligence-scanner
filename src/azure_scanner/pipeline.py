@@ -62,7 +62,7 @@ class ProcessingStatus(str, enum.Enum):
 
 
 class OcrSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
 
     model_id: str
     page_count: int

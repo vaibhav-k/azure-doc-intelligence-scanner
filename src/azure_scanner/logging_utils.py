@@ -91,6 +91,29 @@ class SafeJsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str, sort_keys=True)
 
 
+class _BelowWarningFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno >= logging.WARNING
+
+
+_SDK_PAYLOAD_LOGGERS = ("openai", "openai._base_client")
+_guard = _BelowWarningFilter()
+
+
+def install_sdk_log_guards() -> None:
+    """Drop DEBUG/INFO records from SDK loggers known to log request payloads.
+
+    Verified: openai 1.106 logs the full request options - including message content, i.e. OCR
+    text - at DEBUG via ``openai._base_client``. A logger-level filter applies regardless of how
+    the host application configures handlers or levels (root DEBUG, ``OPENAI_LOG=debug``, ...).
+    Idempotent. Called on import by ``llm_parser``.
+    """
+    for name in _SDK_PAYLOAD_LOGGERS:
+        lg = logging.getLogger(name)
+        if _guard not in lg.filters:
+            lg.addFilter(_guard)
+
+
 def configure_logging(level: str = "INFO") -> None:
     """Install the safe formatter on the root logger. Call once from the entry point."""
     handler = logging.StreamHandler(sys.stderr)

@@ -26,13 +26,14 @@ import openai
 from pydantic import ValidationError
 
 from azure_scanner.errors import PipelineError
-from azure_scanner.logging_utils import log_event
+from azure_scanner.logging_utils import install_sdk_log_guards, log_event
 from azure_scanner.models import SCHEMA_VERSION, ClinicalDocumentExtraction
 
 if TYPE_CHECKING:
     from azure_scanner.config import Settings
 
 logger = logging.getLogger(__name__)
+install_sdk_log_guards()  # privacy: the OpenAI SDK logs request bodies at DEBUG
 
 PROMPT_VERSION = "2026-10-28.2"
 LOW_CONF_OPEN, LOW_CONF_CLOSE = "[[LOW_CONF:", "]]"
