@@ -78,22 +78,9 @@ class ReviewPolicy:
     decimal_checked_fields: tuple[str, ...] = ("strength", "dose", "quantity")
     # Uncertain patient identifiers matter for patient-document association.
     identity_fields: tuple[str, ...] = ("patient_name", "patient_dob_or_age")
-    priority_reasons: frozenset[str] = field(
-        default_factory=lambda: frozenset(
-            {
-                "not_found_in_source",
-                "normalization_changed_numbers",
-                "contradictory_medication_entries",
-                "error_prone_decimal",
-                "dose_without_drug_name",
-                "identity_uncertain",
-                "ocr_low_confidence",
-                "ambiguous",
-                "illegible",
-                "llm_disabled_manual_transcription_required",
-            }
-        )
-    )
+    # Fail-safe escalation: ANY review reason makes the document ``priority`` unless the reason is
+    # listed here. Empty by default; add codes only with clinical sign-off.
+    routine_reasons: frozenset[str] = field(default_factory=frozenset)
 
 
 _TRAILING_ZERO = re.compile(r"\b\d+\.0+\b")  # "5.0 mg" can be misread as 50 mg
@@ -280,7 +267,7 @@ def route_for_review(
     all_reasons = list(dict.fromkeys(doc_reasons + [r for a in assessments for r in a.review_reasons]))
     priority = (
         ReviewPriority.PRIORITY
-        if any(r in policy.priority_reasons for r in all_reasons)
+        if any(r not in policy.routine_reasons for r in all_reasons)
         else ReviewPriority.ROUTINE
     )
     reasons = tuple(sorted(set(all_reasons)))

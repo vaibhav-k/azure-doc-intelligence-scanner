@@ -130,6 +130,45 @@ def test_uncertain_allergy_and_identity_flagged() -> None:
     assert {"allergy_uncertain", "identity_uncertain"} <= set(record.reasons)
 
 
+@pytest.mark.parametrize(
+    "kwargs, reason",
+    [
+        ({"confidences": {"BID": None}}, "ocr_confidence_unknown"),
+        (
+            {"extraction": doc(medications=[clean_med().model_copy(update={"strength": fld()})])},
+            "medication_strength_missing",
+        ),
+        (
+            {
+                "extraction": doc(
+                    medications=[clean_med()], extraction_warnings=["text asked to ignore rules"]
+                )
+            },
+            "model_reported_warnings",
+        ),
+    ],
+)
+def test_every_reason_escalates_to_priority_by_default(kwargs: dict, reason: str) -> None:  # type: ignore[type-arg]
+    extraction = kwargs.pop("extraction", doc(medications=[clean_med()]))
+    record = _route(extraction, **kwargs)
+    assert reason in record.reasons and record.priority is ReviewPriority.PRIORITY
+
+
+def test_routine_reasons_are_an_explicit_opt_in() -> None:
+    m = clean_med().model_copy(update={"strength": fld()})
+    ocr = evaluate_ocr_confidence(ocr_result_from_text(CLEAN_TEXT))
+    policy = ReviewPolicy(routine_reasons=frozenset({"medication_strength_missing"}))
+    record = route_for_review(
+        new_record("c"),
+        ocr=ocr,
+        content=CLEAN_TEXT,
+        extraction=doc(medications=[m]),
+        policy=policy,
+        llm_enabled=True,
+    )
+    assert record.priority is ReviewPriority.ROUTINE and record.status is ReviewStatus.NEEDS_REVIEW
+
+
 def test_ocr_document_flags_propagate() -> None:
     record = _route(doc(), confidences={"Rx": 0.2})
     assert "ocr_low_confidence" in record.reasons
