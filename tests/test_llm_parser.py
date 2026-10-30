@@ -360,3 +360,54 @@ def test_success_log_contains_metadata_only(caplog: pytest.LogCaptureFixture) ->
     rendered = " ".join(r.getMessage() + repr(getattr(r, "safe_fields", "")) for r in caplog.records)
     assert "c9" in rendered and "prompt_tokens" in rendered
     assert all(s not in rendered for s in PHI_SENTINELS)
+
+
+# ---------- output cap, model logging, unusual responses, cleanup ----------
+
+
+def test_output_token_cap_is_sent_only_when_configured(no_sleep: list[float]) -> None:
+    rec = Recorder([ok(), ok()])
+    _sdk_extractor(rec).extract("Rx", correlation_id="c")
+    assert "max_completion_tokens" not in json.loads(rec.requests[0].content)
+    client = openai.OpenAI(
+        base_url="https://unit-test.invalid/openai/v1/",
+        api_key="test",
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(rec)),
+    )
+    LlmExtractor(client, "d", max_output_tokens=4000).extract("Rx", correlation_id="c")
+    assert json.loads(rec.requests[1].content)["max_completion_tokens"] == 4000
+
+
+def test_model_version_is_logged(no_sleep: list[float], caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    caplog.set_level(logging.INFO, logger="azure_scanner.llm_parser")
+    _sdk_extractor(Recorder([ok()])).extract("Rx", correlation_id="c")
+    records = [r for r in caplog.records if r.getMessage() == "llm_extraction_completed"]
+    assert len(records) == 1
+    record = records[0]
+    assert record.safe_fields["model"] == "test-model-2026-01-01"  # type: ignore[attr-defined]
+
+
+def test_response_without_choices_is_a_typed_error(no_sleep: list[float]) -> None:
+    def no_choices(request: Any) -> Any:
+        body = _completion(VALID_JSON)
+        body["choices"] = []
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(LlmSchemaError, match="unparsed_response"):
+        _sdk_extractor(Recorder([no_choices])).extract("Rx", correlation_id="c")
+
+
+def test_unreadable_success_response_is_a_typed_error() -> None:
+    request = httpx.Request("POST", "https://unit-test.invalid/openai/v1/chat/completions")
+    exc = openai.APIResponseValidationError(response=httpx.Response(200, request=request), body=None)
+    with pytest.raises(LlmSchemaError, match="unparsed_response"):
+        LlmExtractor(NS(), "d")._handle_openai_error(exc)
+
+
+def test_close_releases_the_client() -> None:
+    closed: list[bool] = []
+    LlmExtractor(NS(close=lambda: closed.append(True)), "d").close()
+    assert closed == [True]

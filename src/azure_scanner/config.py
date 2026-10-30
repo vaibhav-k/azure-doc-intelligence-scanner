@@ -5,13 +5,16 @@ Typed, validated settings.
   and decides how to exit; library code receives a ``Settings`` instance.
 * Environment variable names are unchanged from the previous version
   (``AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`` etc.), so existing ``.env`` files keep working.
-* Keys are optional. If a key is absent, Microsoft Entra ID (``DefaultAzureCredential``,
-  e.g. a managed identity) is used. ``ENVIRONMENT=prod`` refuses API keys.
+* Keys are optional. If a key is absent, Microsoft Entra ID is used (see ``credentials.py``:
+  a managed identity in prod, ``DefaultAzureCredential`` in dev/test). ``ENVIRONMENT=prod``
+  refuses API keys.
 * Validation errors list variable NAMES only, never values.
 """
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
@@ -27,6 +30,8 @@ class Settings(BaseSettings):
 
     environment: Literal["dev", "test", "prod"] = "dev"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    # Client ID of a user-assigned managed identity (prod). Unset = system-assigned identity.
+    azure_client_id: str | None = None
 
     # --- Azure Document Intelligence ---
     azure_document_intelligence_endpoint: str
@@ -55,6 +60,10 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     llm_max_retries: int = Field(default=2, ge=0, le=5)
     llm_max_input_chars: int = Field(default=60_000, gt=0)
+    # Upper bound on generated tokens (sent as ``max_completion_tokens``). Unset = not sent, which is
+    # the configuration verified live; set it to cap cost and latency per document. Reasoning models
+    # count their reasoning tokens against this limit, so leave generous headroom.
+    llm_max_output_tokens: int | None = Field(default=None, gt=0, le=128_000)
 
     @field_validator("azure_document_intelligence_endpoint", "azure_openai_endpoint")
     @classmethod
@@ -96,3 +105,25 @@ def load_settings(env_file: str | None = ".env") -> Settings:
             msg = str(err.get("msg", "invalid")).removeprefix("Value error, ")
             problems.append(f"{loc}: {msg}")
         raise ConfigurationError("invalid_configuration", detail="; ".join(problems)) from None
+
+
+# Prefixes this application owns. Unrecognised names under them are almost always typos
+# (e.g. OCR_CONFIDENCE_TRESHOLD), which pydantic-settings would otherwise ignore silently.
+_OWNED_PREFIXES = (
+    "AZURE_DOCUMENT_INTELLIGENCE_",
+    "AZURE_OPENAI_",
+    "OCR_",
+    "LLM_",
+    "PREPROCESS_",
+)
+
+
+def unknown_setting_names(env_file: str | None = None) -> list[str]:
+    """Names (never values) of variables under this app's prefixes that no setting reads."""
+    known = {name.upper() for name in Settings.model_fields}
+    names = set(os.environ)
+    if env_file and Path(env_file).is_file():
+        from dotenv import dotenv_values
+
+        names |= set(dotenv_values(env_file))
+    return sorted(n for n in (x.upper() for x in names) if n.startswith(_OWNED_PREFIXES) and n not in known)

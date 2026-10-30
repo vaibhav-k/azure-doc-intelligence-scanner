@@ -365,3 +365,46 @@ def test_status_changes_are_recorded_and_logged_without_phi(
     assert all(s not in logged for s in PHI_SENTINELS)
     assert "dr-reviewer-01" not in logged
     assert all(s not in " ".join(record.reasons) for s in PHI_SENTINELS)
+
+
+# ---------- source matching (whole tokens only) ----------
+
+
+@pytest.mark.parametrize(
+    "needle, content, found",
+    [
+        (
+            "5 mg",
+            "Drug-X 15 mg BID",
+            False,
+        ),  # a misread 15 -> 5 must not pass as "in source"
+        ("5 mg", "take 0.5 mg", False),
+        ("5 mg", "take 5.0 mg", False),
+        ("Drug", "Drugs listed", False),
+        ("Drug X", "DrugX", False),
+        ("1 0 mg", "10 mg", False),
+        ("5 mg", "take 5 mg daily", True),
+        ("5mg", "take 5 mg daily", True),
+        ("5 mg", "take 5mg daily", True),
+        (
+            "2 mg",
+            "<table><tr><td>2</td><td>mg</td></tr></table>",
+            True,
+        ),  # Markdown tables are HTML
+        ("Drug-X", "Drug - X 2 mg", True),
+        ("Rx Drug-X 2 mg", "Rx\nDrug-X\n2 mg", True),
+        ("bid", "BID.", True),
+    ],
+)
+def test_source_matching_uses_whole_tokens(needle: str, content: str, found: bool) -> None:
+    from azure_scanner.review import _find_in_source
+
+    assert bool(_find_in_source(needle, content)) is found
+
+
+def test_misread_value_inside_a_larger_number_is_flagged_not_found() -> None:
+    m = med(drug_name="Drug-X", strength="5 mg")
+    record = _route(doc(medications=[m]), text="Rx Drug-X 15 mg PO BID 7 days")
+    strength = next(a for a in record.field_assessments if a.path == "medications[0].strength")
+    assert strength.found_in_source is False
+    assert "not_found_in_source" in strength.review_reasons

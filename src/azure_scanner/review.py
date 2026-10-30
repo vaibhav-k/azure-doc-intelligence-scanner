@@ -22,6 +22,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from itertools import pairwise
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -104,12 +105,32 @@ def _numbers(text: str | None) -> list[str]:
     return [n.replace(",", ".") for n in _NUMBER.findall(text or "")]
 
 
+# Tokens: whole numbers (with decimals), letter runs, single punctuation marks.
+_TOKEN = re.compile(r"\d+(?:[.,]\d+)*|[^\W\d_]+|[^\w\s]")
+# What may sit between tokens in Document Intelligence output: whitespace, short HTML tags (Markdown
+# output renders tables as HTML) and Markdown table/emphasis characters.
+_SEP = r"(?:\s|<[^<>\n]{0,40}>|[|*_])"
+
+
 def _find_in_source(needle: str, content: str) -> list[tuple[int, int]]:
-    """Locate ``needle`` in OCR content, tolerant of whitespace and case. Returns (offset, length)."""
-    tokens = [re.escape(t) for t in needle.split()]
+    """Locate ``needle`` in OCR ``content``; returns ``(offset, length)`` spans into ``content``.
+
+    Matches whole tokens only, so "5 mg" is NOT found inside "15 mg" or "0.5 mg" and "Drug" is not
+    found inside "Drugs" - a substring hit would let a misread value pass as present in the source
+    and borrow the OCR confidence of different words. Case-insensitive; tolerant of spacing
+    ("5mg" == "5 mg"), line breaks, and table/markup characters between tokens.
+    """
+    tokens = _TOKEN.findall(needle)
     if not tokens:
         return []
-    pattern = re.compile(r"\s+".join(tokens), re.IGNORECASE)
+    parts = [re.escape(tokens[0])]
+    for prev, tok in pairwise(tokens):
+        same_class = (prev[-1].isdigit() and tok[0].isdigit()) or (prev[-1].isalpha() and tok[0].isalpha())
+        # "Drug X" must not match "DrugX", and "1 0" must not match "10".
+        parts.append(_SEP + ("+" if same_class else "*") + re.escape(tok))
+    head = r"(?<!\w)(?<!\d[.,])" if tokens[0][0].isalnum() else ""
+    tail = r"(?!\w)(?![.,]\d)" if tokens[-1][-1].isalnum() else ""
+    pattern = re.compile(head + "".join(parts) + tail, re.IGNORECASE)
     return [(m.start(), m.end() - m.start()) for m in pattern.finditer(content)]
 
 

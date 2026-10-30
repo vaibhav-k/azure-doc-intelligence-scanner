@@ -303,3 +303,72 @@ def test_matching_page_count_passes(page_png: bytes) -> None:
     result = pipe.process(page_png)
     assert result.processing_status is ProcessingStatus.COMPLETED
     assert result.preprocessing is not None and result.preprocessing["page_count"] == 1
+
+
+# ---------- error detail and resource cleanup ----------
+
+
+def test_failure_detail_is_reported_in_result_and_summary() -> None:
+    from types import SimpleNamespace as NS
+
+    from tests.conftest import make_pdf
+
+    one = ocr_result_from_text(CLEAN_TEXT)
+    pipe, _ = _pipeline(NS(content=one.content, pages=[one.pages[0]] * 2), llm=False)
+    result = pipe.process(make_pdf(3))
+    assert result.error_detail == "2/3"
+    assert result.safe_summary()["error_detail"] == "2/3"
+
+
+@pytest.mark.parametrize(
+    "detail, kept",
+    [
+        ("temperature", True),
+        ("messages[1].content", True),
+        ("401", True),
+        ("Patient Jane Doe", False),
+    ],
+)
+def test_error_detail_is_limited_to_identifier_shaped_values(detail: str, kept: bool) -> None:
+    from azure_scanner.pipeline import _safe_detail
+
+    assert (_safe_detail(detail) == detail) is kept
+
+
+def test_close_releases_all_resources_and_tolerates_failures() -> None:
+    from types import SimpleNamespace as NS
+
+    closed: list[str] = []
+
+    def boom() -> None:
+        raise RuntimeError("already closed")
+
+    pipe = DocumentPipeline(
+        NS(close=lambda: closed.append("scanner")),  # type: ignore[arg-type]
+        NS(close=boom),  # type: ignore[arg-type]
+        resources=(NS(close=lambda: closed.append("credential")),),
+    )
+    with pipe:
+        pass
+    assert closed == ["scanner", "credential"]
+
+
+def test_remote_error_detail_that_is_not_identifier_shaped_never_reaches_the_summary(
+    page_png: bytes,
+) -> None:
+    body = {"error": {"message": "bad", "param": f"{PHI_SENTINELS[0]} said"}}
+    pipe, _ = _pipeline(recorder=Recorder([status(400, body=body)]))
+    result = pipe.process(page_png)
+    _assert_failed(result, "llm_extraction", "llm_bad_request")
+    assert result.error_detail is None
+    assert PHI_SENTINELS[0] not in json.dumps(result.safe_summary())
+
+
+def test_failed_stage_timing_is_recorded(page_png: bytes) -> None:
+    from azure.core.exceptions import ServiceRequestError
+
+    pipe, _ = _pipeline(di_error=ServiceRequestError("unreachable"))
+    result = pipe.process(page_png)
+    _assert_failed(result, "ocr", "ocr_connection_error")
+    assert "ocr" in result.timings_ms  # how long the failing call took
+    assert "ocr" not in result.stages_completed

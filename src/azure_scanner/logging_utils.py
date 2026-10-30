@@ -44,6 +44,7 @@ ALLOWED_FIELDS = frozenset(
         "transformations",
         "deskew_reason",
         "model_id",
+        "model",  # model version reported by Azure OpenAI, e.g. for audit after a "latest" update
         "deployment",
         "prompt_version",
         "schema_version",

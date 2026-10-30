@@ -20,8 +20,9 @@ from __future__ import annotations
 import enum
 import hashlib
 import logging
+import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -114,6 +115,9 @@ class ProcessingResult(BaseModel):
     failed_stage: str | None = None
     error_code: str | None = None
     retryable: bool = False
+    # PHI-free operational detail for a failure, e.g. an HTTP status, a rejected parameter NAME or
+    # "returned/expected" page counts. Only ever populated from ``PipelineError.detail``.
+    error_detail: str | None = None
     input_format: str | None = None
     preprocessing: dict[str, Any] | None = None
     ocr: OcrSummary | None = None
@@ -150,6 +154,7 @@ class ProcessingResult(BaseModel):
             "reason_codes": list(self.review.reasons),
             "failed_stage": self.failed_stage,
             "error_code": self.error_code,
+            "error_detail": self.error_detail,
             "retryable": self.retryable,
             "page_count": self.ocr.page_count if self.ocr else None,
             "medication_count": (len(self.extraction.medications) if self.extraction else None),
@@ -159,6 +164,15 @@ class ProcessingResult(BaseModel):
 
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+_SAFE_DETAIL = re.compile(r"[A-Za-z0-9_.\[\]/:-]{1,64}")
+
+
+def _safe_detail(detail: str | None) -> str | None:
+    """Defence in depth: details come from status codes, counts and parameter names, but some are
+    echoed by a remote service, so anything not shaped like an identifier is dropped."""
+    return detail if detail is not None and _SAFE_DETAIL.fullmatch(detail) else None
 
 
 def _now() -> datetime:
@@ -188,11 +202,37 @@ class DocumentPipeline:
         *,
         policy: ReviewPolicy | None = None,
         clock: Callable[[], datetime] = _now,
+        resources: Iterable[Any] = (),
     ) -> None:
         self.scanner = scanner
         self.extractor = extractor
         self.policy = policy or ReviewPolicy()
         self.clock = clock
+        # Extra objects owned by this pipeline (e.g. the shared Entra ID credential), closed by close().
+        self._resources = tuple(resources)
+
+    def close(self) -> None:
+        """Release HTTP connection pools and credentials. Safe to call more than once."""
+        owned: list[Any] = [self.scanner, self.extractor, *self._resources]
+        for resource in owned:
+            close = getattr(resource, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except Exception as exc:  # noqa: BLE001 - shutdown must not mask the run's outcome
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "resource_close_failed",
+                    error_type=type(exc).__name__,
+                )
+
+    def __enter__(self) -> DocumentPipeline:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     def process(self, data: bytes, *, correlation_id: str | None = None) -> ProcessingResult:
         cid = correlation_id or new_correlation_id()
@@ -212,8 +252,10 @@ class DocumentPipeline:
             nonlocal stage
             stage = name
             t0 = time.monotonic()
-            out = fn()
-            timings[name] = int((time.monotonic() - t0) * 1000)
+            try:
+                out = fn()
+            finally:  # record the time even when the stage fails (timeouts, slow errors)
+                timings[name] = int((time.monotonic() - t0) * 1000)
             done.append(name)
             return out
 
@@ -325,6 +367,7 @@ class DocumentPipeline:
                 getattr(exc, "stage", None) or stage,
                 exc.code,
                 exc.retryable,
+                exc.detail,
             )
         except Exception as exc:  # noqa: BLE001 - boundary: unexpected bugs become a coded failure, never success
             log_event(
@@ -359,6 +402,7 @@ class DocumentPipeline:
         stage: str,
         code: str,
         retryable: bool,
+        detail: str | None = None,
     ) -> ProcessingResult:
         if record.status is not ReviewStatus.PENDING:  # failure after routing: restart the record trail
             record = new_record(record.correlation_id)
@@ -370,6 +414,7 @@ class DocumentPipeline:
             failed_stage=stage if stage != "unknown" else None,
             error_code=code,
             retryable=retryable,
+            error_detail=_safe_detail(detail),
             extraction=None,
             review=failed_record,
             timings_ms=timings,

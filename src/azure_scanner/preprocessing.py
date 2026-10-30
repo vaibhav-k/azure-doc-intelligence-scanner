@@ -36,6 +36,10 @@ Image = NDArray[Any]  # explicit type parameters keep older numpy stubs (CI mini
 # (verify against your pricing tier). Inputs above the max side are downscaled, not rejected.
 MIN_SIDE_PX = 50
 MAX_SIDE_PX = 10_000
+# Decompression-bomb guard, checked from the file header BEFORE decoding: a tiny, highly compressible
+# PNG can otherwise expand to gigabytes of pixels. 120 MP (~360 MB as BGR) still admits 48 MP phone
+# photos and large scans, which are then downscaled to MAX_SIDE_PX.
+MAX_DECODE_PIXELS = 120_000_000
 DEFAULT_MAX_INPUT_BYTES = 50 * 1024 * 1024
 # Document Intelligence processes at most 2,000 pages of a PDF/TIFF (the free F0 tier: only 2).
 MAX_PAGES = 2_000
@@ -60,6 +64,7 @@ class InputFormat(str, enum.Enum):
     BMP = "bmp"
     TIFF = "tiff"
     PDF = "pdf"
+    HEIF = "heif"  # HEIC/HEIF (iPhone camera default): supported by Document Intelligence, not OpenCV
 
 
 _RASTER_FORMATS = {InputFormat.JPEG, InputFormat.PNG, InputFormat.BMP}
@@ -92,6 +97,11 @@ class PreprocessResult:
     page_count: int | None = None
 
 
+# ISO-BMFF major brands for HEIF still images and sequences. AVIF ("avif") is deliberately absent:
+# Document Intelligence does not accept it.
+_HEIF_BRANDS = frozenset({b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1", b"msf1"})
+
+
 def sniff_format(data: bytes) -> InputFormat | None:
     """Identify the container from magic bytes (file extensions are not trusted)."""
     if data[:3] == b"\xff\xd8\xff":
@@ -104,6 +114,8 @@ def sniff_format(data: bytes) -> InputFormat | None:
         return InputFormat.TIFF
     if data[:5] == b"%PDF-":
         return InputFormat.PDF
+    if data[4:8] == b"ftyp" and data[8:12] in _HEIF_BRANDS:
+        return InputFormat.HEIF
     return None
 
 
@@ -159,13 +171,76 @@ def _pdf_page_count(data: bytes) -> int:
     return pages
 
 
-def count_pages(data: bytes, fmt: InputFormat) -> int:
-    """Number of pages in ``data``. Single-image formats are one page."""
+def count_pages(data: bytes, fmt: InputFormat) -> int | None:
+    """Number of pages in ``data``; ``None`` when it cannot be counted locally (HEIF).
+
+    Single-image raster formats are one page."""
+    if fmt is InputFormat.HEIF:
+        return None
     if fmt is InputFormat.PDF:
         return _pdf_page_count(data)
     if fmt is InputFormat.TIFF:
         return _tiff_page_count(data)
     return 1
+
+
+_JPEG_SOF = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}  # start-of-frame markers
+_JPEG_NO_LENGTH = frozenset({0x01, *range(0xD0, 0xD8)})  # TEM and RSTn carry no length field
+
+
+def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
+    pos = 2
+    while pos + 4 <= len(data):
+        if data[pos] != 0xFF:
+            return None
+        marker = data[pos + 1]
+        if marker == 0xFF:  # fill byte
+            pos += 1
+            continue
+        if marker in _JPEG_NO_LENGTH:
+            pos += 2
+            continue
+        length = int.from_bytes(data[pos + 2 : pos + 4], "big")
+        if marker in _JPEG_SOF:
+            if pos + 9 > len(data):
+                return None
+            height = int.from_bytes(data[pos + 5 : pos + 7], "big")
+            width = int.from_bytes(data[pos + 7 : pos + 9], "big")
+            return width, height
+        if marker == 0xDA or length < 2:  # scan data before any frame header: malformed
+            return None
+        pos += 2 + length
+    return None
+
+
+def raster_dimensions(data: bytes, fmt: InputFormat) -> tuple[int, int] | None:
+    """(width, height) read from the header without decoding pixels; None if unreadable."""
+    if fmt is InputFormat.PNG:
+        if len(data) < 24 or data[12:16] != b"IHDR":
+            return None
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if fmt is InputFormat.BMP:
+        if len(data) < 26:
+            return None
+        if int.from_bytes(data[14:18], "little") == 12:  # OS/2 BITMAPCOREHEADER
+            return int.from_bytes(data[18:20], "little"), int.from_bytes(data[20:22], "little")
+        width = int.from_bytes(data[18:22], "little", signed=True)
+        height = int.from_bytes(data[22:26], "little", signed=True)
+        return abs(width), abs(height)  # negative height = top-down bitmap
+    if fmt is InputFormat.JPEG:
+        return _jpeg_dimensions(data)
+    return None
+
+
+def _check_decode_budget(data: bytes, fmt: InputFormat) -> None:
+    dims = raster_dimensions(data, fmt)
+    if dims is None:
+        raise ImageValidationError("corrupt_or_undecodable_image")
+    width, height = dims
+    if width == 0 or height == 0:
+        raise ImageValidationError("corrupt_or_undecodable_image")
+    if width * height > MAX_DECODE_PIXELS:
+        raise ImageValidationError("image_dimensions_too_large")
 
 
 def decode_raster(data: bytes) -> Image:
@@ -325,10 +400,15 @@ def preprocess_bytes(
         raise ImageValidationError("unsupported_format")
 
     if fmt not in _RASTER_FORMATS:
-        # Multi-page containers go to Document Intelligence untouched.
-        warnings = ("enhancement_skipped_multipage_format",) if mode is PreprocessMode.ENHANCED else ()
+        # Multi-page containers and HEIF (which OpenCV cannot decode) go to Document Intelligence
+        # untouched; the service validates their dimensions.
+        skipped = (
+            "enhancement_skipped_heif" if fmt is InputFormat.HEIF else "enhancement_skipped_multipage_format"
+        )
+        warnings = (skipped,) if mode is PreprocessMode.ENHANCED else ()
         return PreprocessResult(data, fmt, mode, None, None, (), warnings, page_count=count_pages(data, fmt))
 
+    _check_decode_budget(data, fmt)
     image = decode_raster(data)
     h, w = image.shape[:2]
     if min(h, w) < MIN_SIDE_PX:

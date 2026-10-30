@@ -8,6 +8,8 @@ Azure Document Intelligence adapter.
   ``Retry-After``); this module does not add a second retry loop.
 * ``LROPoller.result(timeout)`` returns silently when the timeout elapses, so completion is
   checked explicitly with ``poller.done()``; an unfinished operation raises ``ocr_timeout``.
+  The service keeps processing (and billing) a timed-out operation; it cannot be cancelled, so a
+  retry of ``ocr_timeout`` submits and pays for the document again.
 * SDK exceptions are mapped to ``OcrError`` codes; their messages are never logged.
 """
 
@@ -34,6 +36,7 @@ from azure_scanner.preprocessing import (
 
 if TYPE_CHECKING:
     from azure.ai.documentintelligence import DocumentIntelligenceClient
+    from azure.core.credentials import TokenCredential
 
     from azure_scanner.config import Settings
 
@@ -44,21 +47,27 @@ logger = logging.getLogger(__name__)
 _MARKDOWN_MODELS = frozenset({"prebuilt-layout"})
 
 
-def build_di_client(settings: Settings) -> DocumentIntelligenceClient:
-    """Create the SDK client. Prefers Entra ID; key auth only when a key is configured."""
+def build_di_client(
+    settings: Settings, credential: TokenCredential | None = None
+) -> DocumentIntelligenceClient:
+    """Create the SDK client. Uses the key when configured, otherwise Entra ID.
+
+    Pass the process-wide ``credential`` (``credentials.build_credential``) so token caching is shared
+    with the Azure OpenAI client; one is created if omitted.
+    """
     from azure.ai.documentintelligence import DocumentIntelligenceClient
     from azure.core.credentials import AzureKeyCredential
 
-    credential: Any
+    auth: Any
     if settings.azure_document_intelligence_key is not None:
-        credential = AzureKeyCredential(settings.azure_document_intelligence_key.get_secret_value())
+        auth = AzureKeyCredential(settings.azure_document_intelligence_key.get_secret_value())
     else:
-        from azure.identity import DefaultAzureCredential
+        from azure_scanner.credentials import build_credential
 
-        credential = DefaultAzureCredential()
+        auth = credential if credential is not None else build_credential(settings)
     return DocumentIntelligenceClient(
         endpoint=settings.azure_document_intelligence_endpoint,
-        credential=credential,
+        credential=auth,
         retry_total=settings.ocr_max_retries,
         retry_backoff_factor=0.8,
         retry_backoff_max=30,
@@ -149,6 +158,12 @@ class DocumentScannerService:
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
         return result
+
+    def close(self) -> None:
+        """Release the SDK client's HTTP connection pool."""
+        close = getattr(self.client, "close", None)
+        if callable(close):
+            close()
 
     def analyze_bytes(self, data: bytes, *, correlation_id: str) -> Any:
         return self.run_ocr(

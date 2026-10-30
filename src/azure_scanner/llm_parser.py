@@ -31,6 +31,8 @@ from azure_scanner.logging_utils import install_sdk_log_guards, log_event
 from azure_scanner.models import SCHEMA_VERSION, ClinicalDocumentExtraction
 
 if TYPE_CHECKING:
+    from azure.core.credentials import TokenCredential
+
     from azure_scanner.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -125,8 +127,12 @@ _V1_SCOPE = "https://ai.azure.com/.default"  # per Microsoft's v1 API documentat
 _LEGACY_SCOPE = "https://cognitiveservices.azure.com/.default"
 
 
-def build_openai_client(settings: Settings) -> openai.OpenAI:
-    """v1 GA surface by default; legacy ``AzureOpenAI`` + api-version when one is configured."""
+def build_openai_client(settings: Settings, credential: TokenCredential | None = None) -> openai.OpenAI:
+    """v1 GA surface by default; legacy ``AzureOpenAI`` + api-version when one is configured.
+
+    ``credential`` is the process-wide Entra ID credential (``credentials.build_credential``); one is
+    created if omitted. It is not used when an API key is configured.
+    """
     endpoint = settings.azure_openai_endpoint
     if not endpoint:
         raise LlmConfigurationError("llm_endpoint_not_configured")
@@ -144,7 +150,7 @@ def build_openai_client(settings: Settings) -> openai.OpenAI:
                 api_version=settings.azure_openai_api_version,
                 **common,
             )
-        provider = _token_provider(settings.azure_openai_token_scope or _LEGACY_SCOPE)
+        provider = _token_provider(settings, credential, settings.azure_openai_token_scope or _LEGACY_SCOPE)
         return openai.AzureOpenAI(
             azure_endpoint=endpoint,
             azure_ad_token_provider=provider,
@@ -155,14 +161,18 @@ def build_openai_client(settings: Settings) -> openai.OpenAI:
     base_url = endpoint.rstrip("/")
     if not base_url.endswith("/openai/v1"):
         base_url += "/openai/v1"
-    api_key: Any = key or _token_provider(settings.azure_openai_token_scope or _V1_SCOPE)
+    api_key: Any = key or _token_provider(
+        settings, credential, settings.azure_openai_token_scope or _V1_SCOPE
+    )
     return openai.OpenAI(base_url=base_url + "/", api_key=api_key, **common)
 
 
-def _token_provider(scope: str) -> Any:
-    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+def _token_provider(settings: Settings, credential: TokenCredential | None, scope: str) -> Any:
+    from azure.identity import get_bearer_token_provider
 
-    return get_bearer_token_provider(DefaultAzureCredential(), scope)
+    from azure_scanner.credentials import build_credential
+
+    return get_bearer_token_provider(credential or build_credential(settings), scope)
 
 
 # ------------------------------------------------------------------------------------------
@@ -223,6 +233,7 @@ class LlmExtractor:
         *,
         temperature: float | None = None,
         max_input_chars: int = 60_000,
+        max_output_tokens: int | None = None,
     ) -> None:
         if not deployment:
             raise LlmConfigurationError("llm_deployment_not_configured")
@@ -230,15 +241,29 @@ class LlmExtractor:
         self._deployment = deployment
         self._temperature = temperature
         self._max_input_chars = max_input_chars
+        self._max_output_tokens = max_output_tokens
 
     @classmethod
-    def from_settings(cls, settings: Settings, client: Any | None = None) -> LlmExtractor:
+    def from_settings(
+        cls,
+        settings: Settings,
+        client: Any | None = None,
+        *,
+        credential: TokenCredential | None = None,
+    ) -> LlmExtractor:
         return cls(
-            client if client is not None else build_openai_client(settings),
+            client if client is not None else build_openai_client(settings, credential),
             settings.azure_openai_deployment_name or "",
             temperature=settings.llm_temperature,
             max_input_chars=settings.llm_max_input_chars,
+            max_output_tokens=settings.llm_max_output_tokens,
         )
+
+    def close(self) -> None:
+        """Release the OpenAI client's HTTP connection pool."""
+        close = getattr(self._client, "close", None)
+        if callable(close):
+            close()
 
     def _handle_openai_error(self, exc: Exception) -> None:
         if isinstance(exc, openai.LengthFinishReasonError):
@@ -266,12 +291,17 @@ class LlmExtractor:
             ) from exc
         if isinstance(exc, openai.InternalServerError):
             raise LlmTransientError("llm_server_error", detail=str(_status_code(exc))) from exc
+        if isinstance(exc, openai.APIResponseValidationError):  # 2xx with a body the SDK cannot read
+            raise LlmSchemaError("unparsed_response") from exc
         if isinstance(exc, openai.APIStatusError):
             raise LlmRequestError("llm_http_error", detail=str(_status_code(exc))) from exc
         raise exc
 
     def _validate_completion(self, completion: Any) -> tuple[Any, Any]:
-        choice = completion.choices[0]
+        choices = getattr(completion, "choices", None) or []
+        if not choices:  # e.g. a filtered response with no choices
+            raise LlmSchemaError("unparsed_response")
+        choice = choices[0]
         message = choice.message
         if getattr(message, "refusal", None):
             raise LlmRefusalError("model_refused")
@@ -301,6 +331,7 @@ class LlmExtractor:
             openai.BadRequestError,
             openai.InternalServerError,
             openai.APIStatusError,
+            openai.APIResponseValidationError,
         ) as exc:
             self._handle_openai_error(exc)
 
@@ -318,6 +349,8 @@ class LlmExtractor:
             "messages": build_messages(document_text),
             "response_format": ClinicalDocumentExtraction,
         }
+        if self._max_output_tokens is not None:
+            kwargs["max_completion_tokens"] = self._max_output_tokens
         if self._temperature is not None:
             kwargs["temperature"] = self._temperature
 
@@ -345,5 +378,6 @@ class LlmExtractor:
             prompt_tokens=outcome.prompt_tokens,
             completion_tokens=outcome.completion_tokens,
             medication_count=len(parsed.medications),
+            model=outcome.model,
         )
         return outcome

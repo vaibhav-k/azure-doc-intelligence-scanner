@@ -8,6 +8,7 @@ it does NOT establish clinical OCR accuracy, which requires a de-identified eval
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -314,3 +315,130 @@ def test_path_wrapper_reads_file(tmp_path, page_png: bytes) -> None:  # type: ig
 def test_path_wrapper_missing_file(tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     with pytest.raises(FileNotFoundError):
         preprocess_image(str(tmp_path / "missing.png"))
+
+
+# ---------- decompression-bomb guard (dimensions read from the header, before decoding) ----------
+
+
+def _with_exif(jpeg: bytes) -> bytes:
+    payload = b"Exif\x00\x00" + b"\x00" * 64
+    app1 = b"\xff\xe1" + (len(payload) + 2).to_bytes(2, "big") + payload
+    return jpeg[:2] + app1 + jpeg[2:]
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda img: encode(img, ".png"),
+        lambda img: encode(img, ".bmp"),
+        lambda img: encode(img, ".jpg"),
+        lambda img: bytes(cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_PROGRESSIVE, 1])[1].tobytes()),
+        lambda img: _with_exif(encode(img, ".jpg")),
+    ],
+    ids=["png", "bmp", "jpeg", "jpeg-progressive", "jpeg-exif"],
+)
+def test_header_dimensions_match_decoded_dimensions(build: Any) -> None:
+    from azure_scanner.preprocessing import raster_dimensions, sniff_format
+
+    img = np.full((321, 457, 3), 255, np.uint8)
+    data = build(img)
+    fmt = sniff_format(data)
+    assert fmt is not None
+    assert raster_dimensions(data, fmt) == (457, 321)
+
+
+def test_top_down_bmp_dimensions_are_positive() -> None:
+    from azure_scanner.preprocessing import InputFormat, raster_dimensions
+
+    data = bytearray(encode(np.full((40, 60, 3), 255, np.uint8), ".bmp"))
+    data[22:26] = (-40).to_bytes(4, "little", signed=True)
+    assert raster_dimensions(bytes(data), InputFormat.BMP) == (60, 40)
+
+
+def test_oversized_image_is_rejected_before_decoding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import azure_scanner.preprocessing as prep
+
+    def must_not_decode(_: bytes) -> None:
+        raise AssertionError("decoded an over-budget image")
+
+    monkeypatch.setattr(prep, "MAX_DECODE_PIXELS", 100 * 100)
+    monkeypatch.setattr(prep, "decode_raster", must_not_decode)
+    with pytest.raises(ImageValidationError, match="image_dimensions_too_large"):
+        preprocess_bytes(encode(np.full((101, 100, 3), 255, np.uint8), ".png"))
+
+
+@pytest.mark.parametrize("cut", [4, 20])
+def test_truncated_jpeg_header_is_rejected(cut: int) -> None:
+    data = encode(synthetic_page(), ".jpg")[:cut]
+    with pytest.raises(ImageValidationError, match="corrupt_or_undecodable_image"):
+        preprocess_bytes(data)
+
+
+# ---------- HEIF (iPhone photos) ----------
+
+
+def _heif(brand: bytes) -> bytes:
+    return b"\x00\x00\x00\x18ftyp" + brand + b"\x00\x00\x00\x00mif1heic" + b"\x00" * 64
+
+
+@pytest.mark.parametrize("brand", [b"heic", b"heix", b"mif1"])
+def test_heif_is_accepted_and_forwarded_untouched(brand: bytes) -> None:
+    from azure_scanner.preprocessing import InputFormat
+
+    data = _heif(brand)
+    out = preprocess_bytes(data, PreprocessMode.ENHANCED)
+    assert out.input_format is InputFormat.HEIF
+    assert out.payload == data
+    assert out.page_count is None  # cannot be counted locally, so the page check is skipped
+    assert out.warnings == ("enhancement_skipped_heif",)
+
+
+def test_avif_is_not_mistaken_for_heif() -> None:
+    with pytest.raises(ImageValidationError, match="unsupported_format"):
+        preprocess_bytes(_heif(b"avif"))
+
+
+@pytest.mark.parametrize(
+    "data, expected",
+    [
+        # SOI, fill byte, RST0 (no length), APP0, then SOF0 with 7x5 pixels
+        (
+            b"\xff\xd8\xff\xff\xd0\xff\xe0\x00\x04ab\xff\xc0\x00\x11\x08\x00\x05\x00\x07" + b"\x00" * 16,
+            (7, 5),
+        ),
+        (
+            b"\xff\xd8\xff\xda\x00\x08" + b"\x00" * 16,
+            None,
+        ),  # scan data before any frame header
+        (b"\xff\xd8\xff\xe0\x00\x01" + b"\x00" * 16, None),  # impossible segment length
+        (b"\xff\xd8\x00\x00" + b"\x00" * 16, None),  # not a marker
+        (b"\xff\xd8\xff\xc0\x00\x11\x08", None),  # frame header cut short
+    ],
+)
+def test_jpeg_header_parser_handles_unusual_and_malformed_markers(
+    data: bytes, expected: tuple[int, int] | None
+) -> None:
+    from azure_scanner.preprocessing import InputFormat, raster_dimensions
+
+    assert raster_dimensions(data, InputFormat.JPEG) == expected
+
+
+def test_other_raster_header_variants() -> None:
+    from azure_scanner.preprocessing import InputFormat, raster_dimensions
+
+    core = (
+        b"BM"
+        + b"\x00" * 12
+        + (12).to_bytes(4, "little")
+        + (9).to_bytes(2, "little")
+        + (4).to_bytes(2, "little")
+    )
+    assert raster_dimensions(core + b"\x00" * 8, InputFormat.BMP) == (
+        9,
+        4,
+    )  # OS/2 core header
+    assert raster_dimensions(b"BM" + b"\x00" * 10, InputFormat.BMP) is None  # truncated
+    assert raster_dimensions(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16, InputFormat.PNG) is None  # no IHDR
+    assert raster_dimensions(b"%PDF-1.7", InputFormat.PDF) is None

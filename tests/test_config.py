@@ -119,3 +119,32 @@ def test_settings_is_immutable(monkeypatch: pytest.MonkeyPatch) -> None:
     # Catch the specific Pydantic ValidationError raised by frozen models
     with pytest.raises(ValidationError):
         s.environment = "prod"  # type: ignore[misc]
+
+
+def test_unknown_setting_names_finds_typos_from_env_and_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from azure_scanner.config import unknown_setting_names
+
+    monkeypatch.setenv("OCR_CONFIDENCE_TRESHOLD", "0.9")
+    monkeypatch.setenv("OCR_CONFIDENCE_THRESHOLD", "0.9")  # known
+    monkeypatch.setenv("AZURE_CLIENT_ID", "x")  # known
+    monkeypatch.setenv("AZURE_TENANT_ID", "x")  # not an owned prefix (azure-identity reads it)
+    env = tmp_path / "custom.env"
+    env.write_text("AZURE_OPENAI_DEPLOYMENT=gpt\n")
+    assert unknown_setting_names(str(env)) == [
+        "AZURE_OPENAI_DEPLOYMENT",
+        "OCR_CONFIDENCE_TRESHOLD",
+    ]
+
+
+def test_llm_max_output_tokens_is_optional_and_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(DI, "https://x.cognitiveservices.azure.com/")
+    assert Settings().llm_max_output_tokens is None  # type: ignore[call-arg]
+    monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "4000")
+    assert Settings().llm_max_output_tokens == 4000  # type: ignore[call-arg]
+    monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "0")
+    with pytest.raises(ValidationError):
+        Settings()  # type: ignore[call-arg]
