@@ -1,4 +1,5 @@
-"""Shared fixtures. All image fixtures are synthetic and contain no patient information.
+"""
+Shared fixtures. All image fixtures are synthetic and contain no patient information.
 
 Real clinical documents must never be added to ``tests/`` (see .gitignore and README).
 """
@@ -111,8 +112,6 @@ def make_tiff(pages: int, tmp_path: Path) -> bytes:
     return path.read_bytes()
 
 
-# A one-page PDF encrypted with a user password ("secret"), text "x". Generated once with
-# reportlab's StandardEncryption; stored compressed because .gitignore excludes *.pdf files.
 _LOCKED_PDF_B64 = (
     "eNqtVc9rJEUUPngQe9eDIAuCSCGMJLCZrt/dLUOku2c6jtlNxmR245oOWDNdyfY66Z5092ySRfYu6knEiygS8SKKsh78C0QE"
     "BU/iTfwThJUVPfi6Z7Jpd4S92Ifqeu999b33qt6ravTawRJpMqPx7ttvfYg29DjNiktqgFZ0ojNV6AgBAkXpcLKvkwItpGOd"
@@ -126,8 +125,8 @@ _LOCKED_PDF_B64 = (
     "r6BW4HU837VJ4ARUOJ7tMSIs7gBFh0m/05aUcxc7zMFCdlwZWMTptIXvMd+1LEwoEF5FpJaC9a8enVRNZa7GUADbiFX1vFNv"
     "iby21J7PHjrQ3fS7XVu09bBqkWAEBTQTgOmSTvaK68ihJU9eQEHuG09cWynuPdV87+CL7JGTv//48/0fnnz2wpsn5z76/W60"
     "9vqXr945uPryaxfPf3b4yvozJ1891vt1++tvH7/16KC58tPa+XPfvfNjA318+zn16c9b+Ptf7v016D/92+d33A8uYP7NJxDq"
-    "zMss6KNM7xoYOQa+/yHYfibQLrqvk3CxVJbkTOfQOR1xnDkdx/M4buE5ncPkgzpCGJnXObW1Rabikc6qHYdbOTseF0hW97vZ"
-    "bSNju0VtLLRWwmFK2xEdYI2VdKQWjGHtaLX8cMSO0ag9OHv//eAsLaEohmp44OmBMJLdFIlpSBtpWiA+nW/GtzRsenXoKiuq"
+    "zMss6KNM7xoYOQa+/yHYfibQLrqvk3CxVJbkTOfQOR1xnDkdx/M4buE5ncPkgzpCGJnXObW1Rabikc6qHYdbOTseF0hW97vZb"
+    "Sunju0VtLLRWwmFK2xEdYI2VdKQWjGHtaLX8cMSO0ag9OHv//eAsLaEohmp44OmBMJLdFIlpSBtpWiA+nW/GtzRsenXoKiuq"
     "UyDMIkaj0VkPjH8A/87rTA=="
 )
 

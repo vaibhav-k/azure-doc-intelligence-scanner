@@ -45,7 +45,9 @@ def test_formatter_never_renders_exception_message_or_traceback() -> None:
 
 def test_correlation_ids_are_random_and_opaque() -> None:
     a, b = new_correlation_id(), new_correlation_id()
-    assert a != b and len(a) == 32 and a.isalnum()
+    assert a != b
+    assert len(a) == 32
+    assert a.isalnum()
 
 
 def test_openai_sdk_payload_debug_logs_are_blocked_regardless_of_app_config(

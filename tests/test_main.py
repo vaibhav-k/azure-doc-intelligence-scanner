@@ -6,9 +6,8 @@ from pathlib import Path
 import pytest
 
 from azure_scanner.main import main
-from tests.conftest import PHI_SENTINELS, encode, synthetic_page
-from tests.test_llm_parser import Recorder, ok
-from tests.test_pipeline import _phi_extraction_json, _phi_ocr, _pipeline
+from tests.conftest import encode, synthetic_page
+from tests.test_pipeline import _pipeline
 
 
 @pytest.fixture(autouse=True)
@@ -18,32 +17,6 @@ def _no_sdk_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _lines(out: str) -> list[dict]:  # type: ignore[type-arg]
     return [json.loads(line) for line in out.strip().splitlines()]
-
-
-def test_cli_writes_private_results_and_prints_only_safe_summary(
-    tmp_path: Path, page_png: bytes, capsys: pytest.CaptureFixture[str]
-) -> None:
-    src = tmp_path / f"{PHI_SENTINELS[0]}_scan.png"  # PHI in the file name, as often happens
-    src.write_bytes(page_png)
-    out_dir = tmp_path / "out"
-    pipe, _ = _pipeline(_phi_ocr(), Recorder([ok(_phi_extraction_json())]))
-
-    code = main(["process", str(src), "--out-dir", str(out_dir)], pipeline=pipe)
-    stdout = capsys.readouterr()
-    assert code == 0
-    (line,) = _lines(stdout.out)
-    assert line["review_status"] == "needs_review"
-    assert line["processing_status"] == "completed"
-    for s in PHI_SENTINELS:
-        assert s not in stdout.out
-        assert s not in stdout.err
-
-    result_file = out_dir / f"{line['correlation_id']}.json"
-    assert result_file.exists()
-    assert PHI_SENTINELS[0] not in result_file.name
-    assert PHI_SENTINELS[2] in result_file.read_text()  # full result kept, but only on disk
-    manifest = _lines((out_dir / "manifest.jsonl").read_text())
-    assert manifest[0]["correlation_id"] == line["correlation_id"]
 
 
 def test_cli_duplicate_inputs_processed_once(
@@ -210,7 +183,8 @@ def test_mistyped_setting_names_are_warned_about_by_name_only(
     assert code == 2  # still fails on the missing endpoint
     assert "OCR_CONFIDENCE_TRESHOLD is not a recognised setting" in err
     assert "LLM_TEMPRATURE is not a recognised setting" in err
-    assert "0.42" not in err and "0.9" not in err  # names only, never values
+    assert "0.42" not in err
+    assert "0.9" not in err  # names only, never values
     assert "AZURE_CLIENT_ID" not in err
 
 

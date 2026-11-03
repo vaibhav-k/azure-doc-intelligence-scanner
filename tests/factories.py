@@ -39,7 +39,6 @@ def doc(**kw: Any) -> ClinicalDocumentExtraction:
     return empty_extraction(**kw)
 
 
-# A clean, fully legible synthetic prescription line and its matching OCR text.
 CLEAN_TEXT = "Rx Drug-X 2 mg PO BID 7 days"
 
 

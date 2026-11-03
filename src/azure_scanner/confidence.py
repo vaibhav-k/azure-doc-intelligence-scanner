@@ -135,7 +135,10 @@ def _is_close_to_cluster(candidate: ReviewItem, cluster: list[ReviewItem], max_d
 
 
 def _expand_cluster(
-    p_items: list[ReviewItem], used: list[bool], cluster: list[ReviewItem], max_dist: float
+    p_items: list[ReviewItem],
+    used: list[bool],
+    cluster: list[ReviewItem],
+    max_dist: float,
 ) -> None:
     changed = True
     while changed:
