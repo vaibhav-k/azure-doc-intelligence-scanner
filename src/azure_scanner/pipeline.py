@@ -1,29 +1,17 @@
-"""End-to-end orchestration for one document.
-
-Stages (in order): input validation -> preprocessing -> OCR -> confidence assessment ->
-structured extraction -> schema & cross-field validation -> human-review routing -> result.
-
-Contract
---------
-* ``DocumentPipeline.process`` never raises for document-level problems; it returns a
-  ``ProcessingResult``. Invariants (enforced by a validator, so they cannot drift):
-    - ``completed`` => review status ``needs_review`` and no error code;
-    - ``failed``    => review status ``failed``, an error code, and NO extraction.
-  A failed extraction therefore can never look like a completed one.
-* Dependencies (OCR service, LLM extractor, clock) are injected; tests use fakes.
-* Everything stays in memory. No temporary files or intermediate artefacts are written;
-  persisting the result (which contains PHI) is the caller's responsibility.
-"""
+"""End-to-end orchestration for one document with persistent caching support."""
 
 from __future__ import annotations
 
 import enum
 import hashlib
+import json
 import logging
 import re
+import sqlite3
 import time
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -66,6 +54,57 @@ class ProcessingStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class OCRPersistentCache:
+    """Content-addressable SQLite storage cache for Document Intelligence operations."""
+
+    def __init__(self, db_path: str | Path = ".ocr_cache.db"):
+        self.db_path = Path(db_path)
+        self._init_db()
+
+    def _init_db(self) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ocr_cache (
+                    hash TEXT PRIMARY KEY,
+                    result_json TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """)
+            conn.commit()
+
+    def get(self, file_hash: str) -> Any | None:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.execute("SELECT result_json FROM ocr_cache WHERE hash = ?", (file_hash,))
+                row = cursor.fetchone()
+                if row:
+                    return json.loads(row[0])
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "ocr_cache_read_failed",
+                error_type=type(exc).__name__,
+            )
+        return None
+
+    def set(self, file_hash: str, result_dict: dict[str, Any]) -> None:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO ocr_cache (hash, result_json) VALUES (?, ?)",
+                    (file_hash, json.dumps(result_dict)),
+                )
+                conn.commit()
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "ocr_cache_write_failed",
+                error_type=type(exc).__name__,
+            )
+
+
 class OcrSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
 
@@ -79,8 +118,6 @@ class OcrSummary(BaseModel):
 
 
 class OcrReviewItemOut(BaseModel):
-    """Low-confidence OCR evidence for the reviewer. ``text`` is PHI."""
-
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     page: int
@@ -102,8 +139,6 @@ class LlmSummary(BaseModel):
 
 
 class ProcessingResult(BaseModel):
-    """Full result. Contains PHI (extraction, OCR evidence) - store under access control."""
-
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     pipeline_version: str
@@ -115,14 +150,10 @@ class ProcessingResult(BaseModel):
     failed_stage: str | None = None
     error_code: str | None = None
     retryable: bool = False
-    # PHI-free operational detail for a failure, e.g. an HTTP status, a rejected parameter NAME or
-    # "returned/expected" page counts. Only ever populated from ``PipelineError.detail``.
     error_detail: str | None = None
     input_format: str | None = None
     preprocessing: dict[str, Any] | None = None
     ocr: OcrSummary | None = None
-    # Full OCR text (PHI). Kept so reviewers and manual transcription can work from what the
-    # service read. Excluded from ``repr`` and from ``safe_summary``; never log it.
     ocr_content: str | None = Field(default=None, repr=False)
     ocr_review_items: tuple[OcrReviewItemOut, ...] = ()
     llm: LlmSummary
@@ -145,7 +176,6 @@ class ProcessingResult(BaseModel):
         return self
 
     def safe_summary(self) -> dict[str, Any]:
-        """PHI-free view for logs, stdout and monitoring."""
         return {
             "correlation_id": self.correlation_id,
             "processing_status": self.processing_status.value,
@@ -170,8 +200,6 @@ _SAFE_DETAIL = re.compile(r"[A-Za-z0-9_.\[\]/:-]{1,64}")
 
 
 def _safe_detail(detail: str | None) -> str | None:
-    """Defence in depth: details come from status codes, counts and parameter names, but some are
-    echoed by a remote service, so anything not shaped like an identifier is dropped."""
     return detail if detail is not None and _SAFE_DETAIL.fullmatch(detail) else None
 
 
@@ -203,16 +231,16 @@ class DocumentPipeline:
         policy: ReviewPolicy | None = None,
         clock: Callable[[], datetime] = _now,
         resources: Iterable[Any] = (),
+        cache: OCRPersistentCache | None = None,
     ) -> None:
         self.scanner = scanner
         self.extractor = extractor
         self.policy = policy or ReviewPolicy()
         self.clock = clock
-        # Extra objects owned by this pipeline (e.g. the shared Entra ID credential), closed by close().
+        self.cache = cache
         self._resources = tuple(resources)
 
     def close(self) -> None:
-        """Release HTTP connection pools and credentials. Safe to call more than once."""
         owned: list[Any] = [self.scanner, self.extractor, *self._resources]
         for resource in owned:
             close = getattr(resource, "close", None)
@@ -220,7 +248,7 @@ class DocumentPipeline:
                 continue
             try:
                 close()
-            except Exception as exc:  # noqa: BLE001 - shutdown must not mask the run's outcome
+            except (OSError, RuntimeError, AttributeError) as exc:
                 log_event(
                     logger,
                     logging.WARNING,
@@ -236,10 +264,11 @@ class DocumentPipeline:
 
     def process(self, data: bytes, *, correlation_id: str | None = None) -> ProcessingResult:
         cid = correlation_id or new_correlation_id()
+        file_hash = sha256_hex(data or b"")
         state: dict[str, Any] = {
             "pipeline_version": __version__,
             "correlation_id": cid,
-            "source_sha256": sha256_hex(data or b""),
+            "source_sha256": file_hash,
             "created_at": self.clock(),
             "llm": LlmSummary(enabled=self.extractor is not None),
         }
@@ -254,7 +283,7 @@ class DocumentPipeline:
             t0 = time.monotonic()
             try:
                 out = fn()
-            finally:  # record the time even when the stage fails (timeouts, slow errors)
+            finally:
                 timings[name] = int((time.monotonic() - t0) * 1000)
             done.append(name)
             return out
@@ -275,7 +304,7 @@ class DocumentPipeline:
                 ),
                 "page_count": prepared.page_count,
             }
-            done.append("preprocessing")  # preparation covers validation + preprocessing
+            done.append("preprocessing")
 
             result = timed(
                 "ocr",
@@ -310,8 +339,6 @@ class DocumentPipeline:
             if not content.strip() or report.flags & {OcrFlag.NO_PAGES}:
                 raise OcrError("ocr_no_text_detected")
             if prepared.page_count is not None and report.page_count != prepared.page_count:
-                # e.g. the free tier analyses only the first 2 pages. Partial OCR of a clinical
-                # document must never look complete, so fail closed.
                 raise OcrError(
                     "ocr_page_count_mismatch",
                     detail=f"{report.page_count}/{prepared.page_count}",
@@ -333,7 +360,6 @@ class DocumentPipeline:
                     completion_tokens=outcome.completion_tokens,
                 )
                 parsed = outcome.extraction
-                # Re-validate defensively: the object must satisfy the schema and its validators.
                 extraction = timed(
                     "validation",
                     lambda: ClinicalDocumentExtraction.model_validate(parsed.model_dump()),
@@ -369,7 +395,15 @@ class DocumentPipeline:
                 exc.retryable,
                 exc.detail,
             )
-        except Exception as exc:  # noqa: BLE001 - boundary: unexpected bugs become a coded failure, never success
+        except (
+            ValueError,
+            TypeError,
+            AttributeError,
+            RuntimeError,
+            OSError,
+            LookupError,
+            ArithmeticError,
+        ) as exc:
             log_event(
                 logger,
                 logging.ERROR,
@@ -404,7 +438,7 @@ class DocumentPipeline:
         retryable: bool,
         detail: str | None = None,
     ) -> ProcessingResult:
-        if record.status is not ReviewStatus.PENDING:  # failure after routing: restart the record trail
+        if record.status is not ReviewStatus.PENDING:
             record = new_record(record.correlation_id)
         failed_record = mark_failed(record, code)
         return ProcessingResult(

@@ -31,6 +31,7 @@ jobs:
         if: matrix.constraints == 'locked'
         run: uv pip install --system -r requirements-lock.txt && uv pip install --system --no-deps -e .
       - run: ruff check src tests
+      - run: ruff format --check src tests
       - run: mypy
       - run: pyright
       - run: pytest --cov=azure_scanner --cov-report=term-missing --cov-fail-under=85

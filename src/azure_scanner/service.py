@@ -1,16 +1,5 @@
 """
-Azure Document Intelligence adapter.
-
-* The SDK client is injected (``build_di_client`` builds one from ``Settings``), so tests run
-  offline and the adapter can be reused by a CLI, worker or API.
-* Works on bytes - no temporary files, no file paths in logs.
-* Bounded retries come from the azure-core retry policy (exponential backoff, honours
-  ``Retry-After``); this module does not add a second retry loop.
-* ``LROPoller.result(timeout)`` returns silently when the timeout elapses, so completion is
-  checked explicitly with ``poller.done()``; an unfinished operation raises ``ocr_timeout``.
-  The service keeps processing (and billing) a timed-out operation; it cannot be cancelled, so a
-  retry of ``ocr_timeout`` submits and pays for the document again.
-* SDK exceptions are mapped to ``OcrError`` codes; their messages are never logged.
+Azure Document Intelligence adapter with incremental non-blocking LRO polling.
 """
 
 from __future__ import annotations
@@ -42,19 +31,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Markdown output is documented for prebuilt-layout. It is not documented for prebuilt-read,
-# so it is only requested for layout (verify before enabling for other models).
 _MARKDOWN_MODELS = frozenset({"prebuilt-layout"})
 
 
 def build_di_client(
     settings: Settings, credential: TokenCredential | None = None
 ) -> DocumentIntelligenceClient:
-    """Create the SDK client. Uses the key when configured, otherwise Entra ID.
-
-    Pass the process-wide ``credential`` (``credentials.build_credential``) so token caching is shared
-    with the Azure OpenAI client; one is created if omitted.
-    """
     from azure.ai.documentintelligence import DocumentIntelligenceClient
     from azure.core.credentials import AzureKeyCredential
 
@@ -82,8 +64,6 @@ def _http_error(exc: HttpResponseError) -> OcrError:
 
 
 class DocumentScannerService:
-    """Runs input validation, preprocessing and OCR for one document."""
-
     def __init__(
         self,
         client: DocumentIntelligenceClient,
@@ -91,6 +71,7 @@ class DocumentScannerService:
         *,
         preprocess_mode: PreprocessMode = PreprocessMode.MINIMAL,
         timeout_seconds: float = 120.0,
+        polling_interval_seconds: float = 1.0,
         max_input_bytes: int | None = None,
     ) -> None:
         if timeout_seconds <= 0:
@@ -99,6 +80,7 @@ class DocumentScannerService:
         self.model_id = model_id
         self.preprocess_mode = preprocess_mode
         self.timeout_seconds = timeout_seconds
+        self.polling_interval_seconds = polling_interval_seconds
         self.max_input_bytes = max_input_bytes
 
     def prepare(self, data: bytes, *, correlation_id: str) -> PreprocessResult:
@@ -134,9 +116,12 @@ class DocumentScannerService:
                 body=AnalyzeDocumentRequest(bytes_source=payload),
                 **kwargs,
             )
-            result = poller.result(timeout=self.timeout_seconds)
-            if not poller.done():
-                raise OcrError("ocr_timeout", retryable=True)
+            while not poller.done():
+                if time.monotonic() - started > self.timeout_seconds:
+                    raise OcrError("ocr_timeout", retryable=True)
+                time.sleep(self.polling_interval_seconds)
+
+            result = poller.result()
             if result is None:
                 raise OcrError("ocr_empty_result")
         except OcrError:
@@ -147,6 +132,7 @@ class DocumentScannerService:
             raise _http_error(exc) from exc
         except (ServiceRequestError, ServiceResponseError) as exc:
             raise OcrError("ocr_connection_error", retryable=True) from exc
+
         log_event(
             logger,
             logging.INFO,
@@ -160,7 +146,6 @@ class DocumentScannerService:
         return result
 
     def close(self) -> None:
-        """Release the SDK client's HTTP connection pool."""
         close = getattr(self.client, "close", None)
         if callable(close):
             close()
@@ -172,6 +157,5 @@ class DocumentScannerService:
         )
 
     def analyze_document(self, file_path: str, *, correlation_id: str = "local") -> Any:
-        """Backward-compatible path-based API. Raises FileNotFoundError for a missing file."""
         with open(file_path, "rb") as fh:
             return self.analyze_bytes(fh.read(), correlation_id=correlation_id)

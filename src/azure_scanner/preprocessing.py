@@ -1,5 +1,5 @@
 """
-Input validation and conservative, opt-in image enhancement.
+Input validation, container diagnostics, and conservative, opt-in image enhancement.
 
 Design rules
 ------------
@@ -9,6 +9,7 @@ Design rules
 * ``PreprocessMode.ENHANCED`` applies bounded deskew, illumination flattening and gentle
   denoising. It never binarises, never rotates by large angles, and never crops: rotation
   uses an expanded canvas. Enable it only if your evaluation set shows it helps.
+* Multi-page PDFs and TIFFs are rendered and enhanced page-by-page when enhanced mode is selected.
 * Every failure raises ``ImageValidationError`` with a stable, PHI-free ``code``.
 * Synthetic-image tests of this module verify geometric safety only; they do not establish
   clinical OCR accuracy.
@@ -17,6 +18,7 @@ Design rules
 from __future__ import annotations
 
 import enum
+import io
 import logging
 import struct
 from dataclasses import dataclass, field
@@ -119,6 +121,15 @@ def sniff_format(data: bytes) -> InputFormat | None:
     return None
 
 
+def validate_container_health(data: bytes, fmt: InputFormat) -> None:
+    """Granular pre-flight check to catch corrupt cross-reference streams or truncated headers."""
+    if fmt is InputFormat.PDF:
+        if b"%%EOF" not in data[-1024:]:
+            raise ImageValidationError("corrupt_pdf_xref_or_truncated")
+    elif fmt is InputFormat.TIFF and len(data) < 8:
+        raise ImageValidationError("corrupt_tiff_header")
+
+
 def _tiff_page_count(data: bytes) -> int:
     """Count TIFF pages by walking the IFD chain (classic TIFF; BigTIFF is not sniffed)."""
     order = "<" if data[:2] == b"II" else ">"
@@ -153,7 +164,6 @@ def _pdf_page_count(data: bytes) -> int:
     try:
         document = pdfium.PdfDocument(data)
     except pdfium.PdfiumError as exc:
-        # pypdfium2 5.x attaches ``err_code``; 4.x does not, but PDFium's last error is set in both.
         code = getattr(exc, "err_code", None)
         if code is None:
             code = pdfium_raw.FPDF_GetLastError()
@@ -172,9 +182,7 @@ def _pdf_page_count(data: bytes) -> int:
 
 
 def count_pages(data: bytes, fmt: InputFormat) -> int | None:
-    """Number of pages in ``data``; ``None`` when it cannot be counted locally (HEIF).
-
-    Single-image raster formats are one page."""
+    """Number of pages in ``data``; ``None`` when it cannot be counted locally (HEIF)."""
     if fmt is InputFormat.HEIF:
         return None
     if fmt is InputFormat.PDF:
@@ -184,8 +192,8 @@ def count_pages(data: bytes, fmt: InputFormat) -> int | None:
     return 1
 
 
-_JPEG_SOF = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}  # start-of-frame markers
-_JPEG_NO_LENGTH = frozenset({0x01, *range(0xD0, 0xD8)})  # TEM and RSTn carry no length field
+_JPEG_SOF = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+_JPEG_NO_LENGTH = frozenset({0x01, *range(0xD0, 0xD8)})
 
 
 def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
@@ -194,7 +202,7 @@ def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
         if data[pos] != 0xFF:
             return None
         marker = data[pos + 1]
-        if marker == 0xFF:  # fill byte
+        if marker == 0xFF:
             pos += 1
             continue
         if marker in _JPEG_NO_LENGTH:
@@ -207,14 +215,13 @@ def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
             height = int.from_bytes(data[pos + 5 : pos + 7], "big")
             width = int.from_bytes(data[pos + 7 : pos + 9], "big")
             return width, height
-        if marker == 0xDA or length < 2:  # scan data before any frame header: malformed
+        if marker == 0xDA or length < 2:
             return None
         pos += 2 + length
     return None
 
 
 def raster_dimensions(data: bytes, fmt: InputFormat) -> tuple[int, int] | None:
-    """(width, height) read from the header without decoding pixels; None if unreadable."""
     if fmt is InputFormat.PNG:
         if len(data) < 24 or data[12:16] != b"IHDR":
             return None
@@ -222,11 +229,11 @@ def raster_dimensions(data: bytes, fmt: InputFormat) -> tuple[int, int] | None:
     if fmt is InputFormat.BMP:
         if len(data) < 26:
             return None
-        if int.from_bytes(data[14:18], "little") == 12:  # OS/2 BITMAPCOREHEADER
+        if int.from_bytes(data[14:18], "little") == 12:
             return int.from_bytes(data[18:20], "little"), int.from_bytes(data[20:22], "little")
         width = int.from_bytes(data[18:22], "little", signed=True)
         height = int.from_bytes(data[22:26], "little", signed=True)
-        return abs(width), abs(height)  # negative height = top-down bitmap
+        return abs(width), abs(height)
     if fmt is InputFormat.JPEG:
         return _jpeg_dimensions(data)
     return None
@@ -255,12 +262,11 @@ def _to_gray(image: Image) -> Image:
 
 
 def _background(gray: Image) -> Image:
-    k = max(15, (min(gray.shape[:2]) // 20) | 1)  # odd kernel, ~5% of the short side
+    k = max(15, (min(gray.shape[:2]) // 20) | 1)
     return cv2.medianBlur(cv2.dilate(gray, np.ones((7, 7), np.uint8)), min(k, 255))
 
 
 def ink_mask(gray: Image) -> Image:
-    """Pixels noticeably darker than their local background (robust to uneven lighting)."""
     diff = np.asarray(cv2.subtract(_background(gray), gray), dtype=np.int16)
     mask: Image = np.greater(diff, _INK_DELTA).astype(np.uint8)
     return mask
@@ -273,14 +279,12 @@ def is_probably_blank(gray: Image) -> bool:
 
 
 def _drop_edge_artifacts(mask: Image) -> Image:
-    """Remove large components touching the image edge (table edges, scanner shadows, borders)."""
     h, w = mask.shape
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
 
     keep = np.ones(n, dtype=bool)
     keep[0] = False
     for i in range(1, n):
-        # Unpack stats safely
         stat_row = stats[i]
         x, y, bw, bh, area = (
             int(stat_row[0]),
@@ -289,16 +293,13 @@ def _drop_edge_artifacts(mask: Image) -> Image:
             int(stat_row[3]),
             int(stat_row[4]),
         )
-
         touches = x == 0 or y == 0 or x + bw >= w or y + bh >= h
         large = area > 0.005 * h * w or bw > 0.5 * w or bh > 0.5 * h
         if touches and large:
             keep[i] = False
 
-    # Use np.isin or a boolean mask lookup that satisfies NumPy stubs cleanly,
-    # or map valid indices directly:
     valid_labels = np.nonzero(keep)[0]
-    out = np.isin(labels, valid_labels).astype(np.uint8) * 255  # or binary mask 1/0
+    out = np.isin(labels, valid_labels).astype(np.uint8) * 255
     return out
 
 
@@ -311,20 +312,13 @@ def _profile_score(mask: Image, angle: float) -> float:
 
 
 def estimate_skew(gray: Image, max_degrees: float = MAX_DESKEW_DEGREES) -> DeskewResult:
-    """
-    Projection-profile skew estimate with an explicit confidence gate.
-
-    Returns the rotation (degrees, OpenCV convention: positive = counter-clockwise) that best
-    aligns text lines horizontally, or a DeskewResult with ``applied=False`` and a reason.
-    Independent of OpenCV's minAreaRect angle convention, which changed between 4.x releases.
-    """
     scale = min(1.0, _DESKEW_ANALYSIS_SIDE / max(gray.shape[:2]))
     small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1 else gray
     mask = _drop_edge_artifacts(ink_mask(small))
     if int(mask.sum()) < 300:
         return DeskewResult(None, False, "insufficient_ink")
 
-    search = max_degrees + 2.0  # search slightly wider so a boundary optimum is detectable
+    search = max_degrees + 2.0
     coarse = np.arange(-search, search + 1e-9, 0.5)
     scores = np.array([_profile_score(mask, a) for a in coarse])
     best = float(coarse[int(np.argmax(scores))])
@@ -344,36 +338,28 @@ def estimate_skew(gray: Image, max_degrees: float = MAX_DESKEW_DEGREES) -> Deske
 
 
 def rotate_expand(image: Image, angle: float) -> Image:
-    """Rotate about the centre on an expanded canvas so no content is cropped."""
     h, w = image.shape[:2]
     m = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
     cos, sin = abs(m[0, 0]), abs(m[0, 1])
     nw, nh = int(np.ceil(h * sin + w * cos)), int(np.ceil(h * cos + w * sin))
     m[0, 2] += nw / 2 - w / 2
     m[1, 2] += nh / 2 - h / 2
-    fill = (
-        255.0,
-        255.0,
-        255.0,
-    )  # white; only the first value is used for single-channel images
+    fill = (255.0, 255.0, 255.0)
     return cv2.warpAffine(image, m, (nw, nh), flags=cv2.INTER_CUBIC, borderValue=fill)
 
 
 def deskew_image(image: Image, max_degrees: float = MAX_DESKEW_DEGREES) -> Image:
-    """Backward-compatible name. Returns the input unchanged unless a confident, bounded skew is found."""
     result = estimate_skew(_to_gray(image), max_degrees)
     return rotate_expand(image, result.angle) if result.applied and result.angle is not None else image
 
 
 def normalize_illumination(gray: Image) -> Image:
-    """Flatten uneven lighting by dividing by the estimated background. No thresholding."""
     bg = _background(gray).astype(np.float32) + 1.0
     out = cv2.divide(gray.astype(np.float32), bg, scale=255.0)
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
 def convert_to_grayscale(image: Image) -> Image:
-    """Converts a BGR image to grayscale (kept for backward compatibility)."""
     return _to_gray(image)
 
 
@@ -384,30 +370,53 @@ def _encode_png(image: Image) -> bytes:
     return bytes(buf.tobytes())
 
 
-def preprocess_bytes(
-    data: bytes,
-    mode: PreprocessMode = PreprocessMode.MINIMAL,
-    *,
-    max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES,
+def _preprocess_multipage_pdf(
+    data: bytes, mode: PreprocessMode, fmt: InputFormat, page_cnt: int | None
 ) -> PreprocessResult:
-    """Validate ``data`` and return the payload to send to Document Intelligence."""
-    if not data:
-        raise ImageValidationError("empty_input")
-    if len(data) > max_input_bytes:
-        raise ImageValidationError("input_too_large")
-    fmt = sniff_format(data)
-    if fmt is None:
-        raise ImageValidationError("unsupported_format")
+    if mode is PreprocessMode.ENHANCED:
+        import pypdfium2 as pdfium
+        from PIL import Image as PILImage
 
-    if fmt not in _RASTER_FORMATS:
-        # Multi-page containers and HEIF (which OpenCV cannot decode) go to Document Intelligence
-        # untouched; the service validates their dimensions.
-        skipped = (
-            "enhancement_skipped_heif" if fmt is InputFormat.HEIF else "enhancement_skipped_multipage_format"
+        doc = pdfium.PdfDocument(data)
+        processed_pages = []
+        for page in doc:
+            bitmap = page.render(scale=2)
+            pil_img = bitmap.to_pil()
+            img_np = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            gray = _to_gray(img_np)
+            deskew = estimate_skew(gray)
+            out = gray
+            if deskew.applied and deskew.angle is not None:
+                out = rotate_expand(out, deskew.angle)
+            out = normalize_illumination(out)
+            out = cv2.fastNlMeansDenoising(out, h=3, templateWindowSize=7, searchWindowSize=21)
+            processed_pages.append(cv2.cvtColor(out, cv2.COLOR_GRAY2BGR))
+        doc.close()
+
+        output_buffer = io.BytesIO()
+        pil_images = [PILImage.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)) for img in processed_pages]
+        if pil_images:
+            pil_images[0].save(output_buffer, format="PDF", save_all=True, append_images=pil_images[1:])
+        return PreprocessResult(
+            payload=output_buffer.getvalue(),
+            input_format=fmt,
+            mode=mode,
+            width=None,
+            height=None,
+            transformations=("multipage_enhanced",),
+            page_count=len(pil_images),
         )
-        warnings = (skipped,) if mode is PreprocessMode.ENHANCED else ()
-        return PreprocessResult(data, fmt, mode, None, None, (), warnings, page_count=count_pages(data, fmt))
 
+    skipped = (
+        "enhancement_skipped_heif" if fmt is InputFormat.HEIF else "enhancement_skipped_multipage_format"
+    )
+    warnings = (skipped,) if mode is PreprocessMode.ENHANCED else ()
+    return PreprocessResult(data, fmt, mode, None, None, (), warnings, page_count=page_cnt)
+
+
+def _preprocess_raster(
+    data: bytes, mode: PreprocessMode, fmt: InputFormat, page_cnt: int | None
+) -> PreprocessResult:
     _check_decode_budget(data, fmt)
     image = decode_raster(data)
     h, w = image.shape[:2]
@@ -440,10 +449,44 @@ def preprocess_bytes(
         payload = _encode_png(out)
         h, w = out.shape[:2]
 
-    return PreprocessResult(payload, fmt, mode, w, h, tuple(transformations), (), deskew, page_count=1)
+    return PreprocessResult(
+        payload,
+        fmt,
+        mode,
+        w,
+        h,
+        tuple(transformations),
+        (),
+        deskew,
+        page_count=page_cnt,
+    )
+
+
+def preprocess_bytes(
+    data: bytes,
+    mode: PreprocessMode = PreprocessMode.MINIMAL,
+    *,
+    max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES,
+) -> PreprocessResult:
+    """Validate ``data`` and return the payload to send to Document Intelligence."""
+    if not data:
+        raise ImageValidationError("empty_input")
+    if len(data) > max_input_bytes:
+        raise ImageValidationError("input_too_large")
+    fmt = sniff_format(data)
+    if fmt is None:
+        raise ImageValidationError("unsupported_format")
+
+    validate_container_health(data, fmt)
+    page_cnt = count_pages(data, fmt)
+
+    if fmt not in _RASTER_FORMATS:
+        return _preprocess_multipage_pdf(data, mode, fmt, page_cnt)
+
+    return _preprocess_raster(data, mode, fmt, page_cnt)
 
 
 def preprocess_image(file_path: str, mode: PreprocessMode = PreprocessMode.ENHANCED) -> bytes:
-    """Backward-compatible path-based wrapper. Prefer ``preprocess_bytes``."""
+    """Backward-compatible path-based wrapper."""
     with open(file_path, "rb") as fh:
         return preprocess_bytes(fh.read(), mode).payload

@@ -265,13 +265,15 @@ class LlmExtractor:
         if callable(close):
             close()
 
-    def _handle_openai_error(self, exc: Exception) -> None:
+    def _handle_completion_errors(self, exc: Exception) -> None:
         if isinstance(exc, openai.LengthFinishReasonError):
             raise LlmTruncatedError("output_truncated") from exc
         if isinstance(exc, openai.ContentFilterFinishReasonError):
             raise LlmContentFilterError("content_filtered") from exc
         if isinstance(exc, ValidationError):
             raise LlmSchemaError("schema_validation_failed", detail=str(exc.error_count())) from exc
+
+    def _handle_status_errors(self, exc: Exception) -> None:
         if isinstance(exc, openai.APITimeoutError):
             raise LlmTimeoutError("llm_timeout") from exc
         if isinstance(exc, openai.APIConnectionError):
@@ -282,6 +284,8 @@ class LlmExtractor:
             raise LlmAuthError("llm_auth_failed", detail=str(_status_code(exc))) from exc
         if isinstance(exc, openai.NotFoundError):
             raise LlmConfigurationError("llm_deployment_not_found", detail="404") from exc
+
+    def _handle_bad_request_error(self, exc: Exception) -> None:
         if isinstance(exc, openai.BadRequestError):
             if getattr(exc, "code", None) == "content_filter":
                 raise LlmContentFilterError("prompt_content_filtered") from exc
@@ -289,12 +293,20 @@ class LlmExtractor:
             raise LlmRequestError(
                 "llm_bad_request", detail=param if isinstance(param, str) else None
             ) from exc
+
+    def _handle_server_and_response_errors(self, exc: Exception) -> None:
         if isinstance(exc, openai.InternalServerError):
             raise LlmTransientError("llm_server_error", detail=str(_status_code(exc))) from exc
         if isinstance(exc, openai.APIResponseValidationError):  # 2xx with a body the SDK cannot read
             raise LlmSchemaError("unparsed_response") from exc
         if isinstance(exc, openai.APIStatusError):
             raise LlmRequestError("llm_http_error", detail=str(_status_code(exc))) from exc
+
+    def _handle_openai_error(self, exc: Exception) -> None:
+        self._handle_completion_errors(exc)
+        self._handle_status_errors(exc)
+        self._handle_bad_request_error(exc)
+        self._handle_server_and_response_errors(exc)
         raise exc
 
     def _validate_completion(self, completion: Any) -> tuple[Any, Any]:

@@ -34,7 +34,12 @@ from azure_scanner.credentials import build_credential, needs_entra_credential
 from azure_scanner.errors import PipelineError
 from azure_scanner.llm_parser import LlmExtractor
 from azure_scanner.logging_utils import configure_logging, log_event, new_correlation_id
-from azure_scanner.pipeline import DocumentPipeline, ProcessingStatus, sha256_hex
+from azure_scanner.pipeline import (
+    DocumentPipeline,
+    OCRPersistentCache,
+    ProcessingStatus,
+    sha256_hex,
+)
 from azure_scanner.preprocessing import DEFAULT_MAX_INPUT_BYTES
 from azure_scanner.review import ReviewPolicy
 from azure_scanner.service import DocumentScannerService, build_di_client
@@ -60,8 +65,21 @@ def _emit(summary: dict[str, object]) -> None:
     sys.stdout.write(json.dumps(summary) + "\n")
 
 
-def build_pipeline(settings: Settings, *, use_llm: bool) -> DocumentPipeline:
-    """Wire the pipeline. One Entra ID credential is shared by both Azure clients (if any is keyless)."""
+def build_pipeline(
+    settings: Settings, *, use_llm: bool, cache_path: str | Path = ".ocr_cache.db"
+) -> DocumentPipeline:
+    """
+    Wire the pipeline with persistent caching. One Entra ID credential is shared by both Azure clients (if any
+    is keyless).
+
+    Args:
+        settings: The application settings.
+        use_llm: Whether to enable LLM-based extraction.
+        cache_path: Path to the persistent OCR cache database.
+
+    Returns:
+        A fully wired DocumentPipeline instance.
+    """
     credential = build_credential(settings) if needs_entra_credential(settings, use_llm=use_llm) else None
     scanner = DocumentScannerService(
         build_di_client(settings, credential),
@@ -71,11 +89,13 @@ def build_pipeline(settings: Settings, *, use_llm: bool) -> DocumentPipeline:
         max_input_bytes=settings.max_input_bytes,
     )
     extractor = LlmExtractor.from_settings(settings, credential=credential) if use_llm else None
+    cache = OCRPersistentCache(cache_path)
     return DocumentPipeline(
         scanner,
         extractor,
         policy=ReviewPolicy(settings.ocr_confidence_threshold),
         resources=(credential,) if credential is not None else (),
+        cache=cache,
     )
 
 
@@ -122,6 +142,12 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="settings file (default: .env in the current folder, if present). An explicit file must exist.",
     )
+    proc.add_argument(
+        "--cache-db",
+        default=".ocr_cache.db",
+        type=Path,
+        help="path to SQLite cache database for persistent deduplication",
+    )
     return p
 
 
@@ -148,7 +174,6 @@ def _process_item(
     cid = new_correlation_id()
     limit = pipeline.scanner.max_input_bytes or DEFAULT_MAX_INPUT_BYTES
     try:
-        # Check the size before reading, so an oversized file is never loaded into memory.
         too_large = path.stat().st_size > limit
         data = b"" if too_large else path.read_bytes()
     except OSError:
@@ -184,7 +209,7 @@ def _process_item(
                 }
             ),
         )
-    except OSError:  # disk full, permissions, ...: report it and carry on with the batch
+    except OSError:
         _fail_item(index, cid, "output_write_failed")
         return True, digest
     failed = result.processing_status is ProcessingStatus.FAILED
@@ -192,45 +217,77 @@ def _process_item(
     return failed, digest
 
 
-def main(argv: list[str] | None = None, *, pipeline: DocumentPipeline | None = None) -> int:
+def _create_pipeline(args: argparse.Namespace) -> DocumentPipeline | None:
+    if args.env_file is not None and not Path(args.env_file).is_file():
+        sys.stderr.write("configuration error: the --env-file given does not exist\n")
+        return None
+
+    env_file = args.env_file or (".env" if Path(".env").is_file() else None)
+
+    for name in unknown_setting_names(env_file):
+        sys.stderr.write(f"configuration warning: {name} is not a recognised setting and is ignored\n")
+
     try:
-        args = _parser().parse_args(argv)
-    except SystemExit as exc:  # argparse exits on --help (0) and usage errors (2)
-        return exc.code if isinstance(exc.code, int) else 2
+        settings = load_settings(env_file)
+    except PipelineError as exc:
+        sys.stderr.write(f"configuration error: {exc.detail}\n")
+        return None
+
+    configure_logging(settings.log_level)
+    return build_pipeline(
+        settings,
+        use_llm=settings.enable_llm and not args.no_llm,
+        cache_path=args.cache_db,
+    )
+
+
+def _prepare_output_directory(out_dir: Path) -> bool:
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError:
+        sys.stderr.write("error: cannot create --out-dir\n")
+        return False
+
+    return True
+
+
+def _process_inputs(
+    inputs: list[Path],
+    pipeline: DocumentPipeline,
+    out_dir: Path,
+) -> int:
+    manifest = out_dir / "manifest.jsonl"
+    seen: dict[str, str] = {}
+    any_failed = False
+
+    for index, path in enumerate(expand_inputs(inputs)):
+        failed, _ = _process_item(index, path, pipeline, out_dir, manifest, seen)
+        any_failed = any_failed or failed
+
+    return 1 if any_failed else 0
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    pipeline: DocumentPipeline | None = None,
+) -> int:
+    args = _parser().parse_args(argv)
 
     owns_pipeline = pipeline is None
-    if pipeline is None:
-        if args.env_file is not None and not Path(args.env_file).is_file():
-            sys.stderr.write("configuration error: the --env-file given does not exist\n")
+
+    if owns_pipeline:
+        pipeline = _create_pipeline(args)
+        if pipeline is None:
             return 2
-        env_file = args.env_file or (".env" if Path(".env").is_file() else None)
-        for name in unknown_setting_names(env_file):
-            sys.stderr.write(f"configuration warning: {name} is not a recognised setting and is ignored\n")
-        try:
-            settings = load_settings(env_file)
-        except PipelineError as exc:
-            sys.stderr.write(f"configuration error: {exc.detail}\n")
-            return 2
-        configure_logging(settings.log_level)
-        pipeline = build_pipeline(settings, use_llm=settings.enable_llm and not args.no_llm)
 
     try:
         out_dir: Path = args.out_dir
-        try:
-            out_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        except OSError:
-            sys.stderr.write("error: cannot create --out-dir\n")
+
+        if not _prepare_output_directory(out_dir):
             return 2
-        manifest = out_dir / "manifest.jsonl"
-        seen: dict[str, str] = {}
-        any_failed = False
 
-        for index, path in enumerate(expand_inputs(args.inputs)):
-            failed, _ = _process_item(index, path, pipeline, out_dir, manifest, seen)
-            if failed:
-                any_failed = True
-
-        return 1 if any_failed else 0
+        return _process_inputs(args.inputs, pipeline, out_dir)
     finally:
         if owns_pipeline:
             pipeline.close()

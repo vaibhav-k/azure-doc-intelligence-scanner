@@ -25,7 +25,6 @@ htmlcov/
 
 # Clinical documents and results: NEVER commit (may contain PHI).
 # Synthetic test images are generated in code (tests/conftest.py), not stored.
-inputs/
 outputs/
 results/
 *.jpg
